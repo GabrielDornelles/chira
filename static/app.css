@@ -19,9 +19,8 @@ button { background: none; border: 0; cursor: pointer; }
 
 /* ───────── header ───────── */
 header { position: sticky; top: 0; z-index: 30; display: flex; align-items: center; gap: 18px; height: 60px; padding: 0 28px; background: linear-gradient(var(--bg) 70%, transparent); }
-.brand { display: flex; align-items: baseline; gap: 10px; }
-.brand b { font-weight: 300; font-size: 19px; letter-spacing: .34em; }
-.brand span { color: var(--gold); font-size: 10px; letter-spacing: .2em; text-transform: uppercase; }
+.brand { display: flex; align-items: center; }
+.brand img { height: 40px; width: auto; display: block; }
 .spacer { flex: 1; }
 .tabs { display: flex; gap: 2px; padding: 3px; border: 1px solid var(--hair); border-radius: 99px; margin-left: 18px; }
 .tabs button { position: relative; padding: 6px 18px; border-radius: 99px; color: var(--muted); font-weight: 500; transition: .15s; }

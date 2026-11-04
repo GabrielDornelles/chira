@@ -1,6 +1,6 @@
 <div align="center">
 
-# 𝐂𝐇𝐈𝐑𝐀
+<h1><picture><source media="(prefers-color-scheme: dark)" srcset="docs/img/logo-dark.svg"><img alt="chira" src="docs/img/logo-light.svg" width="300"></picture></h1>
 
 **Many cameras. One GPU. Zero GIL.**
 Real-time multi-camera detection, tracking, counting, zones and alarms, written in Rust.
