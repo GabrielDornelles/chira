@@ -6,10 +6,10 @@ const cams = new Map();                       // id -> card state
 // vehicle classes: validated categorical slots (dark mode), same colour everywhere (boxes, chips, charts)
 const COLORS = { car: '#3987e5', truck: '#d95926', bus: '#199e70', motorcycle: '#c98500', bicycle: '#d55181', other: '#cfcfd4' };
 const CLASS_LIST = ['car', 'truck', 'bus', 'motorcycle', 'bicycle'];
-const GOLD = '#d6b67a', GOLD_HI = '#fff0cd';
-const STATUS = { ok: '#d6d2c8', warn: '#fab219', crit: '#d03b3b' };
+const ACCENT = '#bda7ff', ACCENT_HI = '#efe9ff';
+const STATUS = { ok: '#d9d5e8', warn: '#fab219', crit: '#d03b3b' };
 const DEFAULTS = { boxes: true, labels: false, trails: true, lines: true, zones: true, hud: true };
-let engineReady = false, srcRate = 30, hovered = null, focusedId = null, tab = 'live';
+let engineReady = false, DEV = false, srcRate = 30, hovered = null, focusedId = null, tab = 'live';
 
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const fmt = (n, d = 0) => Number.isFinite(n) ? n.toFixed(d) : '–';
@@ -17,8 +17,8 @@ const pad = n => String(n).padStart(2, '0');
 const hhmmss = t => { const d = new Date(t); return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; };
 const cap = s => s ? s[0].toUpperCase() + s.slice(1) : s;
 function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('show'), 2600); }
-const load = k => { try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem('airi.' + k) || '{}') }; } catch { return { ...DEFAULTS }; } };
-const save = (k, v) => { try { localStorage.setItem('airi.' + k, JSON.stringify(v)); } catch {} };
+const load = k => { try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem('chira.' + k) || '{}') }; } catch { return { ...DEFAULTS }; } };
+const save = (k, v) => { try { localStorage.setItem('chira.' + k, JSON.stringify(v)); } catch {} };
 const pctColor = p => p >= .85 ? STATUS.crit : p >= .6 ? STATUS.warn : STATUS.ok;
 
 const I = {
@@ -37,29 +37,29 @@ const I = {
 const TOOLS = [['boxes', 'Boxes', 'B'], ['labels', 'Labels', 'L'], ['trails', 'Trails', 'T'], ['lines', 'Counting lines', 'C'], ['zones', 'Zones', 'Z'], ['hud', 'Stats', 'H']];
 
 /* ───────── cameras ───────── */
-async function addCam(setup) {
-  if (!engineReady) return toast('The engine is still starting');
-  $('#menu').classList.remove('open');
-  const r = await fetch('/api/cameras', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ setup, fps: srcRate }) });
-  if (!r.ok) toast('Could not add camera'); else poll();
+async function postCamera(body) {
+  if (!engineReady) { toast('The engine is still starting'); return false; }
+  const r = await fetch('/api/cameras', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  if (!r.ok) { toast((await r.json().catch(() => ({}))).error || 'Could not add the camera'); return false; }
+  poll(); return true;
 }
 async function removeCam(id) { await fetch('/api/cameras/' + id, { method: 'DELETE' }); if (focusedId === id) setFocus(null); poll(); }
 
 function buildCard(c) {
   const el = document.createElement('article');
   el.className = 'card';
-  const key = 'setup' + c.setup;
+  const key = c.key;
   const o = { id: c.id, name: c.name, setup: c.setup, key, el, tg: load(key), latest: null, busy: false, trails: new Map(), counts: {}, bump: {}, flash: {}, zm: new Map(), src: c.src_fps, meta: null, frame: 0 };
   el.innerHTML = `
     <div class="stage">
       <canvas class="base" width="960" height="540"></canvas>
       <canvas class="over"></canvas>
       <div class="scrim-t"></div><div class="scrim-b"></div>
-      <div class="top"><span class="name">${esc(c.name)}</span><span class="live"><i></i><span class="lv">Live</span></span>
+      <div class="top"><span class="name">${esc(c.name)}</span><span class="live"><i></i><span class="lv">Live</span></span><button class="pip" data-a="pip" data-tip="Open alarms">${I.bell}<span></span></button>
         <div class="tools">${TOOLS.map(([k, n, h]) => `<button data-k="${k}" data-tip="${n} · ${h}">${I[k]}</button>`).join('')}<span class="sep"></span>
           <button data-a="cfg" data-tip="Configure · E">${I.cfg}</button><button data-a="focus" data-tip="Focus · F">${I.focus}</button><button data-a="close" data-tip="Remove camera">${I.close}</button></div></div>
       <div class="hud"><div class="counters"><div class="cl" style="display:flex;gap:34px;flex-wrap:wrap"></div><div class="cz" style="display:flex;gap:0;flex-wrap:wrap"></div></div>
-        <div class="rate"><div><b data-k="fps">–</b><span class="micro">fps</span></div><div><b data-k="lat">–</b><span class="micro">latency</span></div><div><b data-k="drop">–</b><span class="micro">dropped</span></div></div></div>
+        <div class="rate dev-only"><div><b data-k="fps">–</b><span class="micro">fps</span></div><div><b data-k="lat">–</b><span class="micro">latency</span></div><div><b data-k="drop">–</b><span class="micro">dropped</span></div></div></div>
     </div>`;
   o.base = $('canvas.base', el); o.bctx = o.base.getContext('2d', { alpha: false, desynchronized: true });
   o.over = $('canvas.over', el); o.octx = o.over.getContext('2d', { desynchronized: true });
@@ -76,6 +76,7 @@ function buildCard(c) {
     else if (b.dataset.a === 'focus') setFocus(focusedId === o.id ? null : o.id);
     else if (b.dataset.a === 'close') removeCam(o.id);
   });
+  $('.pip', el).onclick = () => openAlarms(o.name);
   new ResizeObserver(() => sizeOverlay(o)).observe(o.stage);
   $('#grid').appendChild(el);
 
@@ -192,12 +193,12 @@ function drawOverlay(o) {
     ctx.lineCap = 'round';
     for (const l of meta.lines) {
       const x1 = l.x1 * W, y1 = l.y1 * H, x2 = l.x2 * W, y2 = l.y2 * H, k = Math.max(0, 1 - (now - (o.bump[l.name] || -1e9)) / 700);
-      ctx.strokeStyle = GOLD; ctx.lineWidth = 1.6 * d; ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
-      if (k > 0) { ctx.globalAlpha = k; ctx.strokeStyle = GOLD_HI; ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); ctx.globalAlpha = 1; }
-      ctx.fillStyle = k > 0 ? GOLD_HI : GOLD; for (const [x, y] of [[x1, y1], [x2, y2]]) { ctx.beginPath(); ctx.arc(x, y, 3.2 * d, 0, 6.3); ctx.fill(); }
+      ctx.strokeStyle = ACCENT; ctx.lineWidth = 1.6 * d; ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+      if (k > 0) { ctx.globalAlpha = k; ctx.strokeStyle = ACCENT_HI; ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); ctx.globalAlpha = 1; }
+      ctx.fillStyle = k > 0 ? ACCENT_HI : ACCENT; for (const [x, y] of [[x1, y1], [x2, y2]]) { ctx.beginPath(); ctx.arc(x, y, 3.2 * d, 0, 6.3); ctx.fill(); }
       const label = `${l.name}  ${o.counts[l.name] ?? 0}`, tw = ctx.measureText(label).width + 18 * d, mx = (x1 + x2) / 2, my = (y1 + y2) / 2 - 16 * d;
       ctx.fillStyle = 'rgba(10,10,12,.72)'; rr(ctx, mx - tw / 2, my - 10 * d, tw, 20 * d, 10 * d); ctx.fill();
-      ctx.fillStyle = k > 0 ? GOLD_HI : GOLD; ctx.textAlign = 'center'; ctx.fillText(label, mx, my + .5 * d);
+      ctx.fillStyle = k > 0 ? ACCENT_HI : ACCENT; ctx.textAlign = 'center'; ctx.fillText(label, mx, my + .5 * d);
     }
   }
 
@@ -238,40 +239,99 @@ function drawOverlay(o) {
     for (const b of meta.boxes) {
       const t = `${b.c}  ${b.id}`, w = ctx.measureText(t).width + 12 * d, x = b.b[0] * sx, y = b.b[1] * sy - 19 * d;
       ctx.fillStyle = 'rgba(8,8,10,.7)'; rr(ctx, x, y, w, 17 * d, 8.5 * d); ctx.fill();
-      ctx.fillStyle = '#ece8df'; ctx.fillText(t, x + 6 * d, y + 9 * d);
+      ctx.fillStyle = '#ebe8f4'; ctx.fillText(t, x + 6 * d, y + 9 * d);
     }
   }
 }
 function rr(ctx, x, y, w, h, r) { ctx.beginPath(); if (ctx.roundRect) ctx.roundRect(x, y, w, h, r); else ctx.rect(x, y, w, h); }
 
-/* ───────── alerts (live websocket) ───────── */
-const alerts = []; let unread = 0, soundOn = (() => { try { return localStorage.getItem('airi.sound') !== '0'; } catch { return true; } })();
+/* ───────── alarms: incidents, not notifications ─────────
+   A rule firing repeatedly is ONE incident (server-side grouping). Only the first firing of a new incident can
+   interrupt you, and only if its severity says so:  info -> log only · warning -> bell + camera marker · critical -> toast.
+   Everything else waits quietly in the bell and the Alarms page until someone acknowledges it. */
+const INC = { list: [], snoozes: [], groupMs: 120000, loaded: false };
+const SEV = { info: 0, warning: 1, critical: 2 };
+const SEV_LABEL = { info: 'Info', warning: 'Warning', critical: 'Critical' };
+const SEV_ICON = { info: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8v.01"/></svg>', warning: '<svg viewBox="0 0 24 24"><path d="M12 4l9 16H3z"/><path d="M12 10v4.5M12 17.5v.01"/></svg>', critical: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v5.5M12 16.5v.01"/></svg>' };
+let soundOn = (() => { try { return localStorage.getItem('chira.sound') !== '0'; } catch { return true; } })();
+let notifyMode = (() => { try { return localStorage.getItem('chira.notify') || 'quiet'; } catch { return 'quiet'; } })();   // quiet | all | off
+const setNotify = m => { notifyMode = m; try { localStorage.setItem('chira.notify', m); } catch {} };
+const setSound = on => { soundOn = on; try { localStorage.setItem('chira.sound', on ? '1' : '0'); } catch {} };
+const incState = i => i.acked_t ? 'acked' : (Date.now() - i.last_t < INC.groupMs ? 'active' : 'cleared');
+const needsAttention = i => !i.acked_t && SEV[i.severity] >= 1;
+const ago = t => { const s = Math.max(0, (Date.now() - t) / 1000); return s < 45 ? 'just now' : s < 3600 ? Math.round(s / 60) + ' min ago' : s < 86400 ? Math.round(s / 3600) + ' h ago' : new Date(t).toLocaleDateString(); };
+
+async function loadIncidents() {
+  try { const d = await (await fetch('/api/incidents')).json(); INC.list = d.incidents; INC.snoozes = d.snoozes; INC.groupMs = d.group_ms; INC.loaded = true; refreshAlarmUI(); } catch {}
+}
 function connectAlerts() {
   const ws = new WebSocket(`ws://${location.host}/ws/alerts`);
-  ws.onmessage = e => { try { onAlert(JSON.parse(e.data)); } catch {} };
+  ws.onmessage = e => { try { onAlertMsg(JSON.parse(e.data)); } catch {} };
   ws.onclose = () => setTimeout(connectAlerts, 2000);
 }
-function onAlert(a) {
-  alerts.unshift(a); if (alerts.length > 500) alerts.pop();
-  if (tab !== 'alarms') { unread++; badge(); }
-  for (const o of cams.values()) if (o.name === a.cam) o.flash[a.target] = performance.now();
-  toastAlert(a); if (soundOn && performance.now() - (ping.last || -1e9) > 1500) { ping.last = performance.now(); ping(); }
+function onAlertMsg(m) {
+  if (m.type === 'incident') {
+    const inc = m.incident, i = INC.list.findIndex(x => x.id === inc.id);
+    if (i >= 0) INC.list[i] = inc; else INC.list.unshift(inc);
+    if (inc.severity !== 'info') for (const o of cams.values()) if (o.name === inc.cam) o.flash[inc.target] = performance.now();
+    if (m.new) notifyNew(inc);
+  } else if (m.type === 'ack') {
+    for (const i of INC.list) if (m.ids.includes(i.id)) i.acked_t = m.t;
+  } else if (m.type === 'snooze') { loadIncidents(); return; }
+  refreshAlarmUI();
+}
+function notifyNew(inc) {
+  const sev = SEV[inc.severity];
+  if (sev >= 1) { const b = $('#bell'); b.classList.remove('ring'); void b.offsetWidth; b.classList.add('ring'); }
+  const loud = notifyMode === 'all' ? sev >= 1 : notifyMode === 'quiet' ? sev >= 2 : false;
+  if (!loud) return;
+  toastIncident(inc);
+  if (soundOn && performance.now() - (ping.last || -1e9) > 1500) { ping.last = performance.now(); ping(); }
+}
+function toastIncident(a) {
+  const el = document.createElement('div'); el.className = 'alert';
+  el.innerHTML = `<div class="ic">${I.bell}</div><b></b><span class="t"></span><div class="m"></div><div class="act"><button class="btn sm" data-a="ack">Acknowledge</button><button class="btn ghost sm" data-a="view">View</button></div>`;
+  $('b', el).textContent = a.rule; $('.t', el).textContent = hhmmss(a.last_t); $('.m', el).textContent = `${a.msg} · ${a.cam}`;
+  const close = () => { el.classList.add('out'); setTimeout(() => el.remove(), 320); };
+  el.onclick = e => { const b = e.target.closest('button'); if (!b) return; if (b.dataset.a === 'ack') ackIncident(a.id); else openAlarms(a.cam); close(); };
+  const box = $('#toasts'); box.prepend(el); setTimeout(close, 9000);
+  while (box.children.length > 3) box.lastChild.remove();
+}
+async function ackIncident(id) { await fetch('/api/incidents/ack', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id }) }); }
+async function ackAll(cam) { await fetch('/api/incidents/ack', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(cam ? { cam } : {}) }); }
+async function snoozeRule(cam, rule_id, minutes) { await fetch('/api/snooze', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cam, rule_id, minutes }) }); loadIncidents(); }
+function openAlarms(cam) { if (typeof AL !== 'undefined') { AL.cam = cam || 'all'; AL.view = 'attention'; } setTab('alarms'); }
+
+/* bell badge, camera markers, inbox: all derived from INC.list */
+function refreshAlarmUI() {
+  const pending = INC.list.filter(needsAttention), crit = pending.some(i => i.severity === 'critical');
+  const bb = $('#alarmbadge'); bb.textContent = pending.length > 99 ? '99+' : pending.length; bb.classList.toggle('show', pending.length > 0); bb.classList.toggle('warn', !crit);
+  for (const o of cams.values()) {
+    const mine = pending.filter(i => i.cam === o.name), pip = $('.pip', o.el);
+    if (!pip) continue;
+    const top = mine.reduce((m, i) => SEV[i.severity] > SEV[m] ? i.severity : m, 'info');
+    pip.className = 'pip' + (mine.length ? ' show ' + top : '');
+    $('span', pip).textContent = mine.length ? `${mine.length} alarm${mine.length > 1 ? 's' : ''}` : '';
+  }
+  if ($('#bellmenu').classList.contains('open')) renderInbox();
   if (tab === 'alarms' && typeof renderAlarms === 'function') renderAlarms();
 }
-function badge() { const b = $('#alarmbadge'); b.textContent = unread > 99 ? '99+' : unread; b.classList.toggle('show', unread > 0); }
-const liveToasts = new Map();                  // rule|camera -> {el, n}: repeated alerts collapse into one toast
-function toastAlert(a) {
-  const key = a.rule + '|' + a.cam, prev = liveToasts.get(key);
-  const arm = (el) => { clearTimeout(el._t); el._t = setTimeout(() => { el.classList.add('out'); liveToasts.delete(key); setTimeout(() => el.remove(), 320); }, 6500); };
-  if (prev && prev.el.isConnected) {
-    prev.n++; $('.m', prev.el).textContent = `${a.msg} · ${a.cam}  ×${prev.n}`; $('.t', prev.el).textContent = hhmmss(a.t); arm(prev.el); return;
-  }
-  const el = document.createElement('div'); el.className = 'alert';
-  el.innerHTML = `<div class="ic">${I.bell}</div><b></b><span class="t"></span><div class="m"></div>`;
-  $('b', el).textContent = a.rule; $('.t', el).textContent = hhmmss(a.t); $('.m', el).textContent = `${a.msg} · ${a.cam}`;
-  const box = $('#toasts'); box.prepend(el); liveToasts.set(key, { el, n: 1 }); arm(el);
-  while (box.children.length > 4) box.lastChild.remove();
+function renderInbox() {
+  const pending = INC.list.filter(needsAttention).sort((a, b) => SEV[b.severity] - SEV[a.severity] || b.last_t - a.last_t).slice(0, 8), box = $('#inbox');
+  box.innerHTML = `<div class="ib-head"><b>Needs attention</b><span class="micro">${pending.length ? INC.list.filter(needsAttention).length + ' open' : ''}</span></div>` +
+    (pending.length ? `<div class="ib-list">${pending.map(i => `<div class="ib-row" data-id="${i.id}"><span class="sevdot ${i.severity}"></span><span class="t1">${esc(i.rule)}${i.count > 1 ? ` <span class="cnt">×${i.count}</span>` : ''}</span><button class="btn ghost sm ack" data-ack="${i.id}">Acknowledge</button><span class="t2">${esc(i.cam)} · ${ago(i.last_t)}</span></div>`).join('')}</div>
+      <div class="ib-foot"><button class="btn ghost sm" id="ib-all">Acknowledge all</button><button class="btn ghost sm" id="ib-open">Open alarms</button></div>`
+      : `<div class="ib-empty"><svg viewBox="0 0 24 24"><path d="M12 0C13 8 16 11 24 12C16 13 13 16 12 24C11 16 8 13 0 12C8 11 11 8 12 0Z"/></svg><div>All clear</div><div class="micro" style="margin-top:6px">nothing needs your attention</div></div><div class="ib-foot"><span></span><button class="btn ghost sm" id="ib-open">Open alarms</button></div>`);
+  box.onclick = e => {
+    e.stopPropagation();
+    const a = e.target.closest('[data-ack]'); if (a) return ackIncident(+a.dataset.ack);
+    if (e.target.closest('#ib-all')) return ackAll();
+    if (e.target.closest('#ib-open')) { $('#bellmenu').classList.remove('open'); return openAlarms(); }
+    const r = e.target.closest('.ib-row'); if (r) { const i = INC.list.find(x => x.id === +r.dataset.id); $('#bellmenu').classList.remove('open'); openAlarms(i?.cam); }
+  };
 }
+$('#bell').onclick = e => { e.stopPropagation(); const m = $('#bellmenu'); m.classList.toggle('open'); if (m.classList.contains('open')) renderInbox(); };
+setInterval(() => { if (INC.loaded) refreshAlarmUI(); }, 15000);   // "x min ago", active -> cleared
 let actx;
 function ping() {
   try {
@@ -291,7 +351,7 @@ function setTab(t) {
   $('#hint').classList.toggle('hide', t !== 'live');
   history.replaceState(null, '', t === 'live' ? location.pathname : '#' + t);
   if (t === 'analytics') renderAnalytics(true);
-  if (t === 'alarms') { unread = 0; badge(); renderAlarms(true); }
+  if (t === 'alarms') renderAlarms(true);
 }
 $('#tabs').onclick = e => { const b = e.target.closest('button'); if (b) setTab(b.dataset.tab); };
 
@@ -304,8 +364,8 @@ addEventListener('keydown', e => {
   if (e.metaKey || e.ctrlKey || e.altKey || /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) return;
   if ($('#editor-root').firstChild) return;           // the editor handles its own keys
   const k = e.key.toLowerCase();
-  if (k === 'p') return togglePerf();
-  if (k === 'escape') { setFocus(null); $('#menu').classList.remove('open'); return; }
+  if (k === 'p') return DEV && togglePerf();
+  if (k === 'escape') { setFocus(null); $('#bellmenu').classList.remove('open'); return; }
   if (tab !== 'live') return;
   const o = cams.get(hovered ?? focusedId) ?? (cams.size === 1 ? [...cams.values()][0] : null);
   if (!o) return;
@@ -314,11 +374,12 @@ addEventListener('keydown', e => {
 });
 function togglePerf() { $('#drawer').classList.toggle('open'); }
 
-$('#addbtn').onclick = e => { e.stopPropagation(); $('#menu').classList.toggle('open'); };
 $('#perfbtn').onclick = togglePerf;
-addEventListener('click', e => { if (!e.target.closest('#menu')) $('#menu').classList.remove('open'); });
-$$('.opt[data-setup]').forEach(b => b.onclick = () => addCam(+b.dataset.setup));
-$('#rate').onclick = e => { const b = e.target.closest('button'); if (!b) return; srcRate = +b.dataset.r; $$('#rate button').forEach(x => x.classList.toggle('on', x === b)); };
+$('#addbtn').onclick = () => openAddDialog();
+addEventListener('click', e => {
+  if (!e.target.closest('#bellmenu')) $('#bellmenu').classList.remove('open');
+  const o = e.target.closest('[data-open-add]'); if (o) openAddDialog(o.dataset.openAdd || undefined);
+});
 
 /* ───────── polling ───────── */
 const phases = new Map(); let phaseSig = '', phaseSince = 0;
@@ -338,9 +399,9 @@ function recordPhase(s) {
 let lastCams = [];
 async function poll() {
   let s; try { s = await (await fetch('/api/stats')).json(); } catch { return; }
-  const e = s.engine; engineReady = e.ready;
+  const e = s.engine; engineReady = e.ready; if (DEV !== s.dev) { DEV = s.dev; document.body.classList.toggle('dev', DEV); }
   $('#eng').className = 'pill eng ' + (e.error ? 'bad' : e.ready ? 'ok' : 'busy');
-  $('#engtxt').innerHTML = e.error ? 'Engine error' : e.ready ? `<b>${esc(e.model.replace(/_544x960.*/, '').toUpperCase())}</b> · ${e.ep === 'trt' ? 'TensorRT' : 'CUDA'}` : 'Preparing engine';
+  $('#engtxt').innerHTML = e.error ? 'Engine error' : e.ready ? (DEV ? `<b>${esc(e.model.replace(/_544x960.*/, '').toUpperCase())}</b> · ${e.ep === 'trt' ? 'TensorRT' : 'CUDA'}` : 'Ready') : 'Preparing engine';
   $('#banner').className = 'banner' + (e.ready ? '' : ' show') + (e.error ? ' err' : '');
   if (!e.ready) { $('#bantitle').textContent = e.error ? 'The engine failed to start' : e.message || 'Starting'; $('#bantext').textContent = e.error || 'The first start compiles an optimised GPU engine for your card. This happens once; later starts take seconds.'; }
   $('#addbtn').disabled = !e.ready;
@@ -354,7 +415,8 @@ async function poll() {
     const o = cams.get(c.id), q = k => $(`[data-k="${k}"]`, o.el);
     o.src = c.src_fps;
     $('.live', o.el).classList.toggle('off', c.status !== 'running');
-    $('.lv', o.el).textContent = c.status === 'running' ? `Live · ${c.src_fps} fps` : c.status.split(' ')[0];
+    o.el.classList.toggle('reconnecting', c.status === 'reconnecting');
+    $('.lv', o.el).textContent = c.status === 'running' ? (DEV ? `Live · ${c.src_fps} fps` : 'Live') : c.status.startsWith('error') ? 'Offline' : cap(c.status.split(' ')[0]);
     q('fps').textContent = fmt(c.fps, 1); q('lat').innerHTML = fmt(c.lat_ms) + '<small>ms</small>';
     const t = c.processed + c.dropped, dp = t ? 100 * c.dropped / t : 0, dd = q('drop');
     dd.innerHTML = fmt(dp, 1) + '<small>%</small>'; dd.className = dp > 15 ? 'bad' : dp > 4 ? 'warn' : '';
@@ -366,4 +428,4 @@ async function poll() {
   recordPhase(s);
 }
 setInterval(poll, 500); poll();
-connectAlerts();
+connectAlerts(); loadIncidents();

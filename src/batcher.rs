@@ -32,6 +32,8 @@ struct Entry {
     pending: Option<Job>,
     tx: Sender<Output>,
     stats: Arc<Stats>,
+    /// when this camera last delivered a frame: only cameras that deliver count towards the batch shape
+    last_submit: Option<Instant>,
 }
 
 pub struct Batcher {
@@ -64,7 +66,7 @@ impl Batcher {
 
     pub fn register(&self, cam: u32, stats: Arc<Stats>) -> Receiver<Output> {
         let (tx, rx) = channel();
-        self.state.lock().insert(cam, Entry { pending: None, tx, stats });
+        self.state.lock().insert(cam, Entry { pending: None, tx, stats, last_submit: None });
         rx
     }
 
@@ -76,6 +78,7 @@ impl Batcher {
     pub fn submit(&self, cam: u32, job: Job) {
         let mut st = self.state.lock();
         if let Some(e) = st.get_mut(&cam) {
+            e.last_submit = Some(Instant::now());
             if e.pending.replace(job).is_some() {
                 e.stats.dropped.fetch_add(1, Relaxed);
             }
@@ -99,7 +102,10 @@ impl Batcher {
                     self.cv.wait_for(&mut st, Duration::from_millis(100));
                 }
                 // 2. the batch shape is fixed to the number of cameras (capped), so wait (briefly) for all of them
-                target = st.len().clamp(1, self.max_batch);
+                // Only cameras that are delivering frames count: a camera that was just added (still connecting) or
+                // has stalled must not make the others wait or force a shape change.
+                let live = st.values().filter(|e| e.last_submit.map_or(false, |t| t.elapsed() < Duration::from_millis(700))).count();
+                target = live.clamp(1, self.max_batch);
                 if target > 1 {
                     let deadline = Instant::now() + self.wait;
                     while st.values().filter(|e| e.pending.is_some()).count() < target {

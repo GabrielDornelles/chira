@@ -57,6 +57,12 @@ pub struct AlarmRule {
     pub direction: String,
     #[serde(default = "yes")]
     pub enabled: bool,
+    /// "info" (logged only) | "warning" (badge + camera marker) | "critical" (also a notification and sound)
+    #[serde(default = "warning")]
+    pub severity: String,
+}
+fn warning() -> String {
+    "warning".into()
 }
 fn yes() -> bool {
     true
@@ -120,6 +126,9 @@ impl CameraConfig {
             if a.name.trim().is_empty() {
                 a.name = format!("Alarm {}", i + 1);
             }
+            if !["info", "warning", "critical"].contains(&a.severity.as_str()) {
+                a.severity = "warning".into();
+            }
             a.seconds = a.seconds.clamp(0.0, 3600.0);
             a.percent = a.percent.clamp(1.0, 200.0);
             a.classes.retain(|c| CLASSES.iter().any(|(n, _)| n == c));
@@ -146,20 +155,21 @@ pub fn data_dir() -> String {
     std::env::var("DATA_DIR").unwrap_or_else(|_| "data".into())
 }
 
-fn cfg_path(setup: u32) -> String {
-    format!("{}/config_setup{setup}.json", data_dir())
+/// `key`: "setup1" / "setup2" for the demo cameras, "cam-<slug>" for real ones (so `config_setup1.json` files keep working)
+fn cfg_path(key: &str) -> String {
+    format!("{}/config_{key}.json", data_dir())
 }
 
-pub fn load(setup: u32) -> Option<CameraConfig> {
-    let s = std::fs::read_to_string(cfg_path(setup)).ok()?;
+pub fn load(key: &str) -> Option<CameraConfig> {
+    let s = std::fs::read_to_string(cfg_path(key)).ok()?;
     let mut c: CameraConfig = serde_json::from_str(&s).ok()?;
     c.sanitize();
     Some(c)
 }
 
-pub fn save(setup: u32, c: &CameraConfig) {
+pub fn save(key: &str, c: &CameraConfig) {
     let _ = std::fs::create_dir_all(data_dir());
     if let Ok(s) = serde_json::to_string_pretty(c) {
-        let _ = std::fs::write(cfg_path(setup), s);
+        let _ = std::fs::write(cfg_path(key), s);
     }
 }

@@ -13,20 +13,18 @@
   <nav class="tabs" id="tabs">
     <button data-tab="live" class="on">Live</button>
     <button data-tab="analytics">Analytics</button>
-    <button data-tab="alarms">Alarms<span class="badge" id="alarmbadge">0</span></button>
+    <button data-tab="alarms">Alarms</button>
   </nav>
   <div class="spacer"></div>
+  <span class="pill devtag dev-only" title="Developer mode: performance statistics are visible">Developer</span>
   <div class="pill eng" id="eng"><i></i><span id="engtxt">Starting…</span></div>
-  <div class="pill meter" title="GPU utilisation"><span class="micro">GPU</span><div class="bar"><div id="gpubar"></div></div><b id="gpu">–</b></div>
-  <button class="btn ghost" id="perfbtn">Performance</button>
-  <div class="menu" id="menu">
-    <button class="btn" id="addbtn" disabled>+ Add camera</button>
-    <div class="pop">
-      <button class="opt" data-setup="1"><b>Highway · North</b><span>Single counting line, approach zone</span></button>
-      <button class="opt" data-setup="2"><b>Highway · South</b><span>Two counting lines, merge zone</span></button>
-      <div class="seg"><span class="micro">Stream rate</span><div class="segbtn" id="rate"><button data-r="20">20</button><button data-r="30" class="on">30</button><button data-r="60">60</button></div></div>
-    </div>
+  <div class="pill meter dev-only" title="GPU utilisation"><span class="micro">GPU</span><div class="bar"><div id="gpubar"></div></div><b id="gpu">–</b></div>
+  <button class="btn ghost dev-only" id="perfbtn">Performance</button>
+  <div class="menu" id="bellmenu">
+    <button class="iconbtn" id="bell" aria-label="Alarms" title="Alarms"><svg class="ico" viewBox="0 0 24 24"><path d="M6 16V11a6 6 0 0112 0v5l1.5 2h-15zM10 20a2 2 0 004 0"/></svg><span class="bellbadge" id="alarmbadge"></span></button>
+    <div class="pop inbox" id="inbox"></div>
   </div>
+  <button class="btn" id="addbtn" disabled>Add camera</button>
 </header>
 
 <div class="banner" id="banner"><b id="bantitle"></b><p id="bantext"></p></div>
@@ -34,21 +32,19 @@
 <main id="view-live">
   <div class="grid" id="grid" data-n="0">
     <div class="empty" id="empty">
+      <svg class="glint" viewBox="0 0 24 24"><path d="M12 0C13 8 16 11 24 12C16 13 13 16 12 24C11 16 8 13 0 12C8 11 11 8 12 0Z"/></svg>
       <h2>No cameras yet</h2>
-      <p>Each camera is a live H.264 stream. Detection, tracking, zones and alarms run on the GPU.</p>
-      <div class="row">
-        <button class="opt" data-setup="1"><b>Highway · North</b><span>One counting line, approach zone</span></button>
-        <button class="opt" data-setup="2"><b>Highway · South</b><span>Two counting lines, merge zone</span></button>
-      </div>
+      <p>Connect an IP camera or any RTSP stream. Chira detects, tracks and counts what moves, right on your own GPU.</p>
+      <div class="row"><button class="btn lg" data-open-add>Add a camera</button><button class="btn ghost lg" data-open-add="demo">Try a demo clip</button></div>
     </div>
   </div>
 </main>
 <section class="view hide" id="view-analytics"></section>
 <section class="view hide" id="view-alarms"></section>
 
-<div class="hint" id="hint"><span><kbd>B</kbd> boxes</span><span><kbd>L</kbd> labels</span><span><kbd>T</kbd> trails</span><span><kbd>C</kbd> lines</span><span><kbd>Z</kbd> zones</span><span><kbd>H</kbd> stats</span><span><kbd>E</kbd> configure</span><span><kbd>F</kbd> focus</span><span><kbd>P</kbd> performance</span></div>
+<div class="hint" id="hint"><span><kbd>B</kbd> boxes</span><span><kbd>L</kbd> labels</span><span><kbd>T</kbd> trails</span><span><kbd>C</kbd> lines</span><span><kbd>Z</kbd> zones</span><span><kbd>H</kbd> stats</span><span><kbd>E</kbd> configure</span><span><kbd>F</kbd> focus</span><span class="dev-only"><kbd>P</kbd> performance</span></div>
 
-<aside class="drawer" id="drawer">
+<aside class="drawer dev-only" id="drawer">
   <h3>Performance <button class="btn ghost sm" onclick="togglePerf()">Close</button></h3>
   <div class="kv">
     <div><b id="p-total">–</b><span class="micro">total fps</span></div>
@@ -65,9 +61,13 @@
 <div class="toasts" id="toasts"></div>
 <div class="toast" id="toast"></div>
 <div id="editor-root"></div>
+<div id="dialog-root"></div>
+<div id="lightbox" class="lightbox hide"></div>
 
 <script src="/s/app.js"></script>
 <script src="/s/editor.js"></script>
 <script src="/s/analytics.js"></script>
+<script src="/s/alarms.js"></script>
+<script src="/s/addcam.js"></script>
 </body>
 </html>

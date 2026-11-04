@@ -5,7 +5,7 @@
 //!   encoder thread    -> JPEG + metadata -> websocket subscribers
 
 use crate::alarms::AlarmEngine;
-use crate::analytics::{now_ms, Event, Hub, Occ};
+use crate::analytics::{now_ms, Event, Fire, Hub, Occ};
 use crate::config::{self, class_name, AlarmRule, CameraConfig, LineCfg, ZoneCfg};
 use crate::counter::LineCounter;
 use crate::zones::{ZoneEngine, ZoneEvKind, ZoneSnap};
@@ -16,7 +16,7 @@ use parking_lot::{Mutex, RwLock};
 use serde::Serialize;
 use std::io::Read;
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering::Relaxed};
 use std::sync::{Arc, Condvar};
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
@@ -44,9 +44,9 @@ pub fn setups() -> Vec<Setup> {
 pub fn default_config(setup: u32) -> CameraConfig {
     let line = |id: &str, name: &str, x1, y1, x2, y2| LineCfg { id: id.into(), name: name.into(), x1, y1, x2, y2 };
     let zone = |id: &str, name: &str, pts: &[[f32; 2]], cap| ZoneCfg { id: id.into(), name: name.into(), points: pts.to_vec(), capacity: cap, classes: vec![] };
-    let rule = |id: &str, name: &str, kind: &str, target: &str, classes: &[&str], seconds, percent| AlarmRule {
+    let rule = |id: &str, name: &str, kind: &str, target: &str, classes: &[&str], seconds, percent, sev: &str| AlarmRule {
         id: id.into(), name: name.into(), kind: kind.into(), target: target.into(), classes: classes.iter().map(|c| c.to_string()).collect(),
-        seconds, percent, direction: "any".into(), enabled: true,
+        seconds, percent, direction: "any".into(), enabled: true, severity: sev.into(),
     };
     let classes: Vec<String> = ["car", "truck", "bus", "motorcycle"].iter().map(|c| c.to_string()).collect();
     if setup == 1 {
@@ -55,9 +55,9 @@ pub fn default_config(setup: u32) -> CameraConfig {
             lines: vec![line("l1", "Line A", 0.04, 0.62, 0.62, 0.62)],
             zones: vec![zone("z1", "Approach", &[[0.0, 0.66], [0.50, 0.66], [0.66, 1.0], [0.0, 1.0]], 8)],
             alarms: vec![
-                rule("a1", "Heavy vehicle", "enter", "z1", &["truck", "bus"], 0.0, 80.0),
-                rule("a2", "Slow vehicle", "dwell", "z1", &[], 10.0, 80.0),
-                rule("a3", "Zone nearly full", "occupancy", "z1", &[], 0.0, 85.0),
+                rule("a1", "Heavy vehicle", "enter", "z1", &["truck", "bus"], 0.0, 80.0, "info"),
+                rule("a2", "Slow vehicle", "dwell", "z1", &[], 10.0, 80.0, "warning"),
+                rule("a3", "Zone nearly full", "occupancy", "z1", &[], 0.0, 85.0, "critical"),
             ],
         }
     } else {
@@ -66,8 +66,8 @@ pub fn default_config(setup: u32) -> CameraConfig {
             lines: vec![line("l1", "Line B", 0.25, 0.30, 0.56, 0.30), line("l2", "Line C", 0.0, 0.78, 0.66, 0.70)],
             zones: vec![zone("z1", "Merge", &[[0.22, 0.32], [0.56, 0.32], [0.64, 0.70], [0.02, 0.76]], 6)],
             alarms: vec![
-                rule("a1", "Heavy vehicle", "enter", "z1", &["truck", "bus"], 0.0, 80.0),
-                rule("a2", "Slow vehicle", "dwell", "z1", &[], 10.0, 80.0),
+                rule("a1", "Heavy vehicle", "enter", "z1", &["truck", "bus"], 0.0, 80.0, "info"),
+                rule("a2", "Slow vehicle", "dwell", "z1", &[], 10.0, 80.0, "warning"),
             ],
         }
     }
@@ -115,11 +115,22 @@ pub struct BoxOut {
     pub s: f32,
 }
 
+pub enum Src {
+    /// the bundled clip, published as a real-time MPEG-TS stream over local TCP
+    Demo { setup: u32, start_s: u32, port: u16 },
+    /// any URL ffmpeg can read: rtsp://, rtsps://, rtmp://, http(s) mjpeg/hls, srt://, udp:// ...
+    Url(String),
+}
+
 pub struct Camera {
     pub id: u32,
     pub name: String,
+    /// configuration key: lines, zones and alarms are saved per key
+    pub key: String,
     pub setup: u32,
-    pub fps: u32,
+    /// source frame rate (configured for the demo, measured for real streams)
+    pub fps: AtomicU32,
+    pub kind: &'static str,
     pub status: Mutex<String>,
     pub stats: Arc<Stats>,
     pub stop: Arc<AtomicBool>,
@@ -142,29 +153,42 @@ impl Camera {
     }
 }
 
-pub fn start(id: u32, setup: &Setup, fps: u32, port: u16, batcher: Arc<Batcher>, hub: Arc<Hub>) -> Arc<Camera> {
+/// Hide `user:pass@` of a stream URL (for the UI and logs).
+pub fn redact(url: &str) -> String {
+    match (url.find("://"), url.rfind('@')) {
+        (Some(i), Some(j)) if j > i => format!("{}***@{}", &url[..i + 3], &url[j + 1..]),
+        _ => url.to_string(),
+    }
+}
+
+pub fn start(id: u32, name: String, key: String, src: Src, fps: u32, batcher: Arc<Batcher>, hub: Arc<Hub>) -> Arc<Camera> {
     let (tx, _rx) = watch::channel(Arc::new(Vec::new()));
+    let (kind, setup) = match &src {
+        Src::Demo { setup, .. } => ("demo", *setup),
+        Src::Url(_) => ("url", 0),
+    };
     let cam = Arc::new(Camera {
         id,
-        name: setup.name.to_string(),
-        setup: setup.id,
-        fps,
-        status: Mutex::new("starting (loading model)".into()),
+        name,
+        config: RwLock::new(config::load(&key).unwrap_or_else(|| if setup > 0 { default_config(setup) } else { default_url_config() })),
+        key,
+        setup,
+        fps: AtomicU32::new(fps),
+        kind,
+        status: Mutex::new("connecting".into()),
         stats: Arc::new(Stats::default()),
         stop: Arc::new(AtomicBool::new(false)),
         started: Instant::now(),
-        config: RwLock::new(config::load(setup.id).unwrap_or_else(|| default_config(setup.id))),
         cfg_ver: AtomicU64::new(1),
         hub,
         tx,
         children: Mutex::new(Vec::new()),
     });
-    let start_s = setup.start_s;
     let c = cam.clone();
     std::thread::Builder::new()
         .name(format!("cam{id}-main"))
         .spawn(move || {
-            if let Err(e) = run(c.clone(), start_s, port, batcher) {
+            if let Err(e) = run(c.clone(), src, batcher) {
                 eprintln!("camera {} failed: {e:#}", c.id);
                 *c.status.lock() = format!("error: {e}");
                 c.stop.store(true, Relaxed);
@@ -174,30 +198,27 @@ pub fn start(id: u32, setup: &Setup, fps: u32, port: u16, batcher: Arc<Batcher>,
     cam
 }
 
-fn run(cam: Arc<Camera>, start_s: u32, port: u16, batcher: Arc<Batcher>) -> anyhow::Result<()> {
+/// A new real camera starts empty: the person draws their own lines and zones.
+pub fn default_url_config() -> CameraConfig {
+    CameraConfig { classes: ["car", "truck", "bus", "motorcycle"].iter().map(|c| c.to_string()).collect(), lines: vec![], zones: vec![], alarms: vec![] }
+}
+
+fn run(cam: Arc<Camera>, src: Src, batcher: Arc<Batcher>) -> anyhow::Result<()> {
     let rx = batcher.register(cam.id, cam.stats.clone());
-    let r = run_inner(&cam, start_s, port, &batcher, rx);
+    let r = run_inner(&cam, src, &batcher, rx);
     batcher.unregister(cam.id);
     r
 }
 
-fn run_inner(
-    cam: &Arc<Camera>,
-    start_s: u32,
-    port: u16,
-    batcher: &Arc<Batcher>,
-    rx: std::sync::mpsc::Receiver<crate::batcher::Output>,
-) -> anyhow::Result<()> {
-
-    // 2. "the stream": a publisher ffmpeg that serves the mp4 as MPEG-TS over TCP
-    //    (-re = real time 30 fps, like a camera; without it, as fast as the consumer pulls)
-    let url = format!("tcp://127.0.0.1:{port}");
-    let reader = Command::new("ffmpeg")
-        .args(["-loglevel", "error", "-fflags", "nobuffer", "-f", "mpegts", "-i"])
-        .arg(format!("{url}?listen=1"))
+/// decode + scale to 960x540 (letterboxed if the camera is not 16:9) + pad to 544 rows, raw RGB on a pipe
+fn spawn_reader(input: &[String]) -> std::io::Result<Child> {
+    Command::new("ffmpeg")
+        .args(["-loglevel", "error", "-nostdin"])
+        .args(input)
         .args([
+            "-an",
             "-vf",
-            &format!("scale={W}:{VIEW_H}:flags=fast_bilinear,pad={W}:{H}:0:0:color=0x727272"),
+            &format!("scale={W}:{VIEW_H}:flags=fast_bilinear:force_original_aspect_ratio=decrease,pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:color=0x727272"),
             "-pix_fmt",
             "rgb24",
             "-f",
@@ -207,48 +228,114 @@ fn run_inner(
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .stdin(Stdio::null())
-        .spawn()?;
-    let mut reader = reader;
-    let mut stdout = reader.stdout.take().unwrap();
-    cam.children.lock().push(reader);
-    std::thread::sleep(Duration::from_millis(400));
-    // A real stream is paced by its source: `-re` makes ffmpeg emit frames at wall-clock rate.
-    // The clip is 30 fps, so for 60/120 fps sources frames are duplicated (fps filter) and
-    // re-encoded with low-latency x264, like a camera encoder would. Playback speed is never changed.
-    let mut pubcmd = Command::new("ffmpeg");
-    pubcmd.args(["-loglevel", "error", "-re", "-stream_loop", "-1", "-ss", &start_s.to_string(), "-i", &video_path(), "-an"]);
-    if cam.fps == 30 {
-        // native rate: just re-mux the camera's H.264 (still paced in real time by -re)
-        pubcmd.args(["-c:v", "copy", "-bsf:v", "h264_mp4toannexb"]);
-    } else {
-        pubcmd
-            .args(["-vf", &format!("fps={}", cam.fps)])
-            .args(["-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-b:v", "12M"])
-            .args(["-g", &cam.fps.to_string()]);
-    }
-    pubcmd
-        .args(["-f", "mpegts"])
-        .arg(&url)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::inherit());
-    cam.children.lock().push(pubcmd.spawn()?);
+        .spawn()
+}
 
-    // 3. reader thread (pipe -> queue)
+fn url_input(url: &str) -> Vec<String> {
+    let mut v: Vec<String> = ["-fflags", "nobuffer", "-flags", "low_delay"].iter().map(|s| s.to_string()).collect();
+    if url.starts_with("rtsp") {
+        // TCP is the safe default for cameras behind Wi-Fi / NAT; the socket timeout makes a dead camera fail fast
+        v.extend(["-rtsp_transport", "tcp", crate::discover::rtsp_timeout_opt(), "8000000"].iter().map(|s| s.to_string()));
+    } else if url.starts_with("rtmp") || url.starts_with("http") {
+        v.extend(["-rw_timeout", "8000000"].iter().map(|s| s.to_string()));
+    }
+    v.extend(["-i".to_string(), url.to_string()]);
+    v
+}
+
+fn run_inner(cam: &Arc<Camera>, src: Src, batcher: &Arc<Batcher>, rx: std::sync::mpsc::Receiver<crate::batcher::Output>) -> anyhow::Result<()> {
+    // 2. the stream. Demo: a publisher ffmpeg serves the mp4 as MPEG-TS over TCP, paced in real time (-re) like a camera.
+    //    Real camera: the reader pulls the URL itself and reconnects when it drops.
+    //    A real stream is paced by its source; playback speed is never changed. For 60/120 fps demo sources frames
+    //    are duplicated (fps filter) and re-encoded with low-latency x264, like a camera encoder would.
+    if let Src::Demo { start_s, port, .. } = &src {
+        let url = format!("tcp://127.0.0.1:{port}");
+        let demo_in: Vec<String> = ["-fflags", "nobuffer", "-f", "mpegts", "-i"].iter().map(|s| s.to_string()).chain([format!("{url}?listen=1")]).collect();
+        let fps = cam.fps.load(Relaxed);
+        let mut pubcmd = Command::new("ffmpeg");
+        pubcmd.args(["-loglevel", "error", "-re", "-stream_loop", "-1", "-ss", &start_s.to_string(), "-i", &video_path(), "-an"]);
+        if fps == 30 {
+            pubcmd.args(["-c:v", "copy", "-bsf:v", "h264_mp4toannexb"]);
+        } else {
+            pubcmd
+                .args(["-vf", &format!("fps={fps}")])
+                .args(["-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-b:v", "12M"])
+                .args(["-g", &fps.to_string()]);
+        }
+        pubcmd.args(["-f", "mpegts"]).arg(&url).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::inherit());
+        // the reader must be listening before the publisher connects; the reader thread spawns it, then we start publishing
+        let r = spawn_reader(&demo_in)?;
+        cam.children.lock().push(r);
+        std::thread::sleep(Duration::from_millis(400));
+        cam.children.lock().push(pubcmd.spawn()?);
+    }
+
+    // 3. reader thread (pipe -> batcher), supervising the ffmpeg process
     {
         let batcher = batcher.clone();
         let cam = cam.clone();
+        let url = if let Src::Url(u) = &src { Some(u.clone()) } else { None };
         std::thread::Builder::new().name(format!("cam{}-read", cam.id)).spawn(move || {
-            loop {
-                let mut buf = vec![0u8; FRAME_BYTES];
-                if stdout.read_exact(&mut buf).is_err() {
-                    break;
-                }
-                cam.stats.decoded.fetch_add(1, Relaxed);
-                batcher.submit(cam.id, Job { frame: buf, captured: Instant::now() });
+            let mut backoff = 1u64;
+            let mut first = true;
+            'outer: loop {
+                // demo: the already-spawned reader (last-but-one child); url: spawn a fresh one
+                let mut stdout = if let Some(u) = &url {
+                    match spawn_reader(&url_input(u)) {
+                        Ok(mut c) => {
+                            let o = c.stdout.take().unwrap();
+                            {
+                                let mut ch = cam.children.lock();
+                                ch.retain_mut(|x| x.try_wait().map(|s| s.is_none()).unwrap_or(false));
+                                ch.push(c);
+                            }
+                            o
+                        }
+                        Err(e) => {
+                            *cam.status.lock() = format!("error: {e}");
+                            break;
+                        }
+                    }
+                } else {
+                    let mut ch = cam.children.lock();
+                    ch[0].stdout.take().unwrap()
+                };
                 if cam.stop.load(Relaxed) {
                     break;
                 }
+                if !first {
+                    *cam.status.lock() = "reconnecting".into();
+                }
+                first = false;
+                let mut got_frame = false;
+                loop {
+                    let mut buf = vec![0u8; FRAME_BYTES];
+                    if stdout.read_exact(&mut buf).is_err() {
+                        break;
+                    }
+                    if !got_frame {
+                        got_frame = true;
+                        backoff = 1;
+                        *cam.status.lock() = "running".into();
+                    }
+                    cam.stats.decoded.fetch_add(1, Relaxed);
+                    batcher.submit(cam.id, Job { frame: buf, captured: Instant::now() });
+                    if cam.stop.load(Relaxed) {
+                        break 'outer;
+                    }
+                }
+                if cam.stop.load(Relaxed) || url.is_none() {
+                    break;
+                }
+                // the camera went away: wait (1, 2, 4 ... 10 s) and connect again
+                *cam.status.lock() = "reconnecting".into();
+                for _ in 0..backoff * 10 {
+                    if cam.stop.load(Relaxed) {
+                        break 'outer;
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                backoff = (backoff * 2).min(10);
             }
             if !cam.stop.load(Relaxed) {
                 *cam.status.lock() = "error: stream ended".into();
@@ -304,7 +391,6 @@ fn run_inner(
     }
 
     // 5. inference loop (this thread)
-    *cam.status.lock() = "running".into();
     let cam = cam.clone();
     let mut tracker = ByteTracker::new();
     let mut counter = LineCounter::new(vec![], W as f32, VIEW_H as f32);
@@ -341,7 +427,7 @@ fn run_inner(
         let now = Instant::now();
         let zone_events = zones.update(&tracks, now);
         let fired = alarms.eval(&zone_events, &crossings, &zones, now);
-        publish(&cam, &crossings, &zone_events, &fired);
+        publish(&cam, &frame, &tracks, &crossings, &zone_events, &fired);
         if last_occ.elapsed() >= Duration::from_secs(2) {
             last_occ = Instant::now();
             for (_, name, n, cap) in zones.occupancy() {
@@ -378,6 +464,9 @@ fn run_inner(
             set(&cam.stats.fps, n as f64 / el);
             let d = cam.stats.decoded.load(Relaxed);
             set(&cam.stats.decode_fps, (d - dec0) as f64 / el);
+            if cam.kind == "url" && (d - dec0) > 5 {
+                cam.fps.store(((d - dec0) as f64 / el).round() as u32, Relaxed);
+            }
             dec0 = d;
             set(&cam.stats.infer_ms, inf_acc / n as f64);
             set(&cam.stats.total_ms, tot_acc / n as f64);
@@ -392,8 +481,8 @@ fn run_inner(
     Ok(())
 }
 
-/// Turn engine output into stored events (analytics) and live alerts (UI).
-fn publish(cam: &Camera, crossings: &[crate::counter::CrossEv], zone_events: &[crate::zones::ZoneEv], fired: &[crate::alarms::Fired]) {
+/// Turn engine output into stored events (analytics) and alarm incidents (UI).
+fn publish(cam: &Camera, frame: &[u8], tracks: &[crate::tracker::TrackOut], crossings: &[crate::counter::CrossEv], zone_events: &[crate::zones::ZoneEv], fired: &[crate::alarms::Fired]) {
     let t = now_ms();
     let base = |kind: &str, target: &str, cls: &str, track: u32| Event {
         t, cam: cam.name.clone(), setup: cam.setup, kind: kind.into(), target: target.into(), cls: cls.into(),
@@ -419,7 +508,19 @@ fn publish(cam: &Camera, crossings: &[crate::counter::CrossEv], zone_events: &[c
         e.rule = f.rule_name.clone();
         e.msg = f.msg.clone();
         e.dir = f.kind.clone();
-        cam.hub.push(e.clone());
-        cam.hub.alert(&e);
+        cam.hub.push(e);
+        let bbox = tracks.iter().find(|t| t.id == f.track && f.track != 0).map(|t| t.bbox);
+        cam.hub.fire(
+            Fire {
+                cam: cam.name.clone(), rule_id: f.rule_id.clone(), rule: f.rule_name.clone(), kind: f.kind.clone(), severity: f.severity.clone(),
+                target: f.target_name.clone(), cls: f.cls.clone(), msg: f.msg.clone(), bbox,
+            },
+            || {
+                // a snapshot is only taken for the first firing of an incident
+                let mut jpg = Vec::with_capacity(120_000);
+                jpeg_encoder::Encoder::new(&mut jpg, 80).encode(&frame[..W * VIEW_H * 3], W as u16, VIEW_H as u16, jpeg_encoder::ColorType::Rgb).ok()?;
+                Some(jpg)
+            },
+        );
     }
 }

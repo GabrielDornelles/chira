@@ -53,7 +53,7 @@ function chartFlow(host, A) {
   const W = Math.max(320, host.clientWidth), H = 230, L = 34, R = 6, T = 8, B = 24, pw = W - L - R, ph = H - T - B, slot = pw / A.N, bw = Math.max(2, Math.min(24, slot - 2));
   const tot = Array.from({ length: A.N }, (_, i) => A.flow.reduce((s, f) => s + f[i], 0)), max = niceMax(Math.max(1, ...tot)), y = v => T + ph - v / max * ph;
   let g = '';
-  for (const v of ticksFor(max)) g += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="#2c2c2a"/><text x="${L - 8}" y="${y(v) + 4}" text-anchor="end">${v}</text>`;
+  for (const v of ticksFor(max)) g += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="#2a2833"/><text x="${L - 8}" y="${y(v) + 4}" text-anchor="end">${v}</text>`;
   for (let k = 0; k <= 4; k++) { const i = Math.round(k * (A.N - 1) / 4); g += `<text x="${L + (i + .5) * slot}" y="${H - 6}" text-anchor="${k === 0 ? 'start' : k === 4 ? 'end' : 'middle'}">${hm(A.t0 + i * A.bin)}</text>`; }
   let bars = '';
   for (let i = 0; i < A.N; i++) {
@@ -69,7 +69,7 @@ function chartFlow(host, A) {
   hit.addEventListener('pointermove', e => {
     const r = svg.getBoundingClientRect(), x = (e.clientX - r.left) * W / r.width, i = Math.max(0, Math.min(A.N - 1, Math.floor((x - L) / slot)));
     hv.style.display = ''; hv.setAttribute('x', L + i * slot);
-    const f = el('div'); f.append(el('div', 'tt', `${hms(A.t0 + i * A.bin)} – ${hms(A.t0 + (i + 1) * A.bin)}`), tipRow('#ece8df', 'Total', tot[i]));
+    const f = el('div'); f.append(el('div', 'tt', `${hms(A.t0 + i * A.bin)} – ${hms(A.t0 + (i + 1) * A.bin)}`), tipRow('#ebe8f4', 'Total', tot[i]));
     CLASS_LIST.forEach((c, ci) => { if (A.flow[ci][i]) f.append(tipRow(COLORS[c], cap(c), A.flow[ci][i], false)); });
     showTip(host, f, e.clientX - host.getBoundingClientRect().left, e.clientY - host.getBoundingClientRect().top);
   });
@@ -83,7 +83,7 @@ function chartMix(host, A) {
   let s = '';
   rows.forEach(([c, v], i) => {
     const y = 4 + i * rh, w = Math.max(4, v / max * pw);
-    s += `<text x="0" y="${y + 17}" style="fill:#ece8df;font-size:12px">${cap(c)}</text><path d="${rightRounded(L, y + 6, w, 16, 4)}" fill="${COLORS[c]}"/><text x="${L + w + 10}" y="${y + 18}" style="fill:#ece8df;font-size:12px">${v} <tspan style="fill:#8a8a92">· ${Math.round(100 * v / total)}%</tspan></text>`;
+    s += `<text x="0" y="${y + 17}" style="fill:#ebe8f4;font-size:12px">${cap(c)}</text><path d="${rightRounded(L, y + 6, w, 16, 4)}" fill="${COLORS[c]}"/><text x="${L + w + 10}" y="${y + 18}" style="fill:#ebe8f4;font-size:12px">${v} <tspan style="fill:#8f8c9e">· ${Math.round(100 * v / total)}%</tspan></text>`;
   });
   host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" height="${H}">${s}</svg>`;
 }
@@ -93,17 +93,17 @@ function chartOcc(host, A) {
   if (!names.length) { host.innerHTML = '<div class="nodata">No zone data in this window</div>'; return; }
   const W = Math.max(320, host.clientWidth), H = 230, L = 40, R = 14, T = 10, B = 24, pw = W - L - R, ph = H - T - B, max = Math.max(100, Math.ceil(A.peak / 25) * 25), x = i => L + (i + .5) * pw / A.N, y = v => T + ph - v / max * ph;
   let g = '';
-  for (let v = 0; v <= max; v += 25) g += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="#2c2c2a"/><text x="${L - 8}" y="${y(v) + 4}" text-anchor="end">${Math.round(v)}%</text>`;
-  g += `<line x1="${L}" x2="${W - R}" y1="${y(100)}" y2="${y(100)}" stroke="#5b5b63"/><text x="${W - R}" y="${y(100) - 5}" text-anchor="end" style="fill:#c3c2b7">full</text>`;
+  for (let v = 0; v <= max; v += 25) g += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="#2a2833"/><text x="${L - 8}" y="${y(v) + 4}" text-anchor="end">${Math.round(v)}%</text>`;
+  g += `<line x1="${L}" x2="${W - R}" y1="${y(100)}" y2="${y(100)}" stroke="#5e5b6e"/><text x="${W - R}" y="${y(100) - 5}" text-anchor="end" style="fill:#c3c2b7">full</text>`;
   for (let k = 0; k <= 4; k++) { const i = Math.round(k * (A.N - 1) / 4); g += `<text x="${x(i)}" y="${H - 6}" text-anchor="${k === 0 ? 'start' : k === 4 ? 'end' : 'middle'}">${hm(A.t0 + i * A.bin)}</text>`; }
   let lines = '', ends = '';
   names.forEach((n, si) => {
     const col = ZONE_COLORS[si % 3]; let d = '', pen = false, last = -1;
     A.series.get(n).forEach((v, i) => { if (v == null) { pen = false; return; } d += `${pen ? 'L' : 'M'}${x(i)},${y(v)}`; pen = true; last = i; });
     lines += `<path d="${d}" fill="none" stroke="${col}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
-    if (last >= 0) ends += `<circle cx="${x(last)}" cy="${y(A.series.get(n)[last])}" r="4" fill="${col}" stroke="#111114" stroke-width="2"/>`;
+    if (last >= 0) ends += `<circle cx="${x(last)}" cy="${y(A.series.get(n)[last])}" r="4" fill="${col}" stroke="#121118" stroke-width="2"/>`;
   });
-  host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" height="${H}"><g class="grid">${g}</g>${lines}${ends}<line id="xh" y1="${T}" y2="${T + ph}" stroke="#8a8a92" style="display:none"/><rect id="hit" x="${L}" y="${T}" width="${pw}" height="${ph}" fill="transparent"/></svg>`;
+  host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" height="${H}"><g class="grid">${g}</g>${lines}${ends}<line id="xh" y1="${T}" y2="${T + ph}" stroke="#8f8c9e" style="display:none"/><rect id="hit" x="${L}" y="${T}" width="${pw}" height="${ph}" fill="transparent"/></svg>`;
   const svg = $('svg', host), xh = $('#xh', host);
   $('#hit', host).addEventListener('pointermove', e => {
     const r = svg.getBoundingClientRect(), px = (e.clientX - r.left) * W / r.width, i = Math.max(0, Math.min(A.N - 1, Math.floor((px - L) / (pw / A.N))));
@@ -118,8 +118,8 @@ function chartOcc(host, A) {
 function chartDwell(host, A) {
   if (!A.dwellN) { host.innerHTML = '<div class="nodata">No completed zone visits yet</div>'; return; }
   const W = Math.max(260, host.clientWidth), H = 190, L = 6, R = 6, T = 22, B = 26, pw = W - L - R, ph = H - T - B, n = A.dwell.length, slot = pw / n, bw = Math.min(24, slot - 8), max = Math.max(...A.dwell), y = v => T + ph - v / max * ph;
-  let s = `<line x1="${L}" x2="${W - R}" y1="${T + ph}" y2="${T + ph}" stroke="#383835"/>`;
-  A.dwell.forEach((v, i) => { const x = L + i * slot + (slot - bw) / 2; if (v) s += `<path d="${topRounded(x, y(v), bw, T + ph - y(v), 4)}" fill="#9085e9"/><text x="${x + bw / 2}" y="${y(v) - 6}" text-anchor="middle" style="fill:#ece8df">${v}</text>`; s += `<text x="${L + (i + .5) * slot}" y="${H - 8}" text-anchor="middle">${DWELL_LABELS[i]}</text>`; });
+  let s = `<line x1="${L}" x2="${W - R}" y1="${T + ph}" y2="${T + ph}" stroke="#363341"/>`;
+  A.dwell.forEach((v, i) => { const x = L + i * slot + (slot - bw) / 2; if (v) s += `<path d="${topRounded(x, y(v), bw, T + ph - y(v), 4)}" fill="#9085e9"/><text x="${x + bw / 2}" y="${y(v) - 6}" text-anchor="middle" style="fill:#ebe8f4">${v}</text>`; s += `<text x="${L + (i + .5) * slot}" y="${H - 8}" text-anchor="middle">${DWELL_LABELS[i]}</text>`; });
   host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" height="${H}">${s}</svg>`;
 }
 
@@ -139,7 +139,7 @@ async function renderAnalytics(force) {
     kp('k-rate', A.lastMin, ' / min', 'last 60 seconds');
     kp('k-peak', A.series.size ? Math.round(A.peak) : '–', A.series.size ? '%' : '', 'busiest zone moment');
     kp('k-dwell', A.dwellN ? fmt(A.avgDwell, 1) : '–', A.dwellN ? ' s' : '', `${A.dwellN} completed visits`);
-    kp('k-alarms', A.alarms, '', 'alarms raised');
+    const incs = INC.list.filter(i => i.last_t >= A.t0 && (AN.cam === 'all' || i.cam === AN.cam) && SEV[i.severity] >= 1); kp('k-alarms', incs.length, '', incs.filter(i => !i.acked_t).length ? `${incs.filter(i => !i.acked_t).length} not acknowledged` : 'all handled');
     $('#lg-flow').innerHTML = legendHtml(CLASS_LIST.filter((c, i) => A.flow[i].some(v => v)).map(c => [COLORS[c], cap(c)]));
     $('#lg-occ').innerHTML = A.series.size > 1 ? legendHtml([...A.series.keys()].map((n, i) => [ZONE_COLORS[i % 3], n, true])) : '';
     $('#flow-sub').textContent = `Vehicles crossing counting lines · ${RANGES[AN.range][1] / 1000 >= 60 ? RANGES[AN.range][1] / 60000 + ' min' : RANGES[AN.range][1] / 1000 + ' s'} bins`;
@@ -160,7 +160,7 @@ function buildAnalytics(root) {
   root.innerHTML = `
     <h1>Analytics</h1>
     <div class="filters"><select id="an-cam"></select><div class="segbtn" id="an-range">${Object.entries(RANGES).map(([k, v]) => `<button data-r="${k}"${k === AN.range ? ' class="on"' : ''}>${v[2]}</button>`).join('')}</div><span class="micro" id="an-live" style="margin-left:auto">auto-refresh · 5 s</span></div>
-    <div class="kpis">${[['k-total', 'Vehicles counted'], ['k-rate', 'Current rate'], ['k-peak', 'Peak zone occupancy'], ['k-dwell', 'Average dwell time'], ['k-alarms', 'Alarms']].map(([id, l]) => `<div class="kpi" id="${id}"><span class="micro">${l}</span><b>–</b><div class="d"></div></div>`).join('')}</div>
+    <div class="kpis">${[['k-total', 'Vehicles counted'], ['k-rate', 'Current rate'], ['k-peak', 'Peak zone occupancy'], ['k-dwell', 'Average dwell time'], ['k-alarms', 'Alarm incidents']].map(([id, l]) => `<div class="kpi" id="${id}"><span class="micro">${l}</span><b>–</b><div class="d"></div></div>`).join('')}</div>
     <div class="panels">
       <div class="panel w8"><div class="head"><div><h3>Traffic flow</h3><div class="sub" id="flow-sub"></div></div><a class="tablelink" id="tbl-link">Show table</a></div><div id="lg-flow"></div><div class="chart" id="c-flow"></div><div id="t-flow" class="hide"></div></div>
       <div class="panel w4"><h3>Vehicle mix</h3><div class="sub">Share of counted vehicles</div><div class="chart" id="c-mix"></div></div>
@@ -173,35 +173,3 @@ function buildAnalytics(root) {
 }
 setInterval(() => { if (tab === 'analytics') renderAnalytics(); else if (tab === 'alarms') renderAlarms(); }, 5000);
 addEventListener('resize', () => { if (tab === 'analytics' && AN.data) renderAnalytics(); });
-
-/* ───────── alarms page ───────── */
-const AL = { cam: 'all', busy: false };
-function ruleText(r, cfg) {
-  const z = cfg.zones.find(z => z.id === r.target), l = cfg.lines.find(l => l.id === r.target), who = r.classes.length ? r.classes.map(cap).join(' / ') : 'Any vehicle';
-  const tn = (z || l)?.name || '?';
-  return { enter: `${who} enters <b>${esc(tn)}</b>`, exit: `${who} leaves <b>${esc(tn)}</b>`, dwell: `${who} stays in <b>${esc(tn)}</b> ≥ ${r.seconds} s`, occupancy: `<b>${esc(tn)}</b> is ≥ ${r.percent}% full`, cross: `${who} crosses <b>${esc(tn)}</b>${r.direction === 'fwd' ? ' (forward)' : r.direction === 'rev' ? ' (backward)' : ''}` }[r.kind] || r.kind;
-}
-
-async function renderAlarms(force) {
-  const root = $('#view-alarms'); if (AL.busy) return; AL.busy = true;
-  try {
-    const [data, cfgs] = await Promise.all([fetchEvents(24 * 3600e3), Promise.all([...cams.values()].map(o => fetch(`/api/config/${o.id}`).then(r => r.json()).then(j => ({ o, j }))))]);
-    let list = data.events.filter(e => e.kind === 'alarm'); const seen = new Set(list.map(e => `${e.t}|${e.rule}|${e.track}`));
-    for (const a of alerts) if (!seen.has(`${a.t}|${a.rule}|${a.track}`)) list.push(a);
-    list.sort((a, b) => b.t - a.t); const camsInList = [...new Set(list.map(e => e.cam))];
-    if (AL.cam !== 'all') list = list.filter(e => e.cam === AL.cam);
-    root.innerHTML = `
-      <h1>Alarms</h1>
-      <div class="filters"><select id="al-cam"><option value="all">All cameras</option>${camsInList.map(c => `<option value="${esc(c)}"${c === AL.cam ? ' selected' : ''}>${esc(c)}</option>`).join('')}</select>
-        <div class="segbtn" id="al-sound"><button data-s="1"${soundOn ? ' class="on"' : ''}>Sound on</button><button data-s="0"${!soundOn ? ' class="on"' : ''}>Off</button></div><span class="micro" style="margin-left:auto">last 24 hours · ${list.length} alarms</span></div>
-      <div class="micro">Active rules</div>
-      <div class="rulecards">${cfgs.length ? cfgs.map(({ o, j }) => `<div class="rcard"><div class="row"><b>${esc(j.name)}</b><button class="btn ghost sm" data-edit="${o.id}">Edit rules</button></div><ul>${j.config.alarms.length ? j.config.alarms.map(r => `<li class="${r.enabled ? '' : 'off'}"><b>${esc(r.name)}</b><span>${ruleText(r, j.config)}</span></li>`).join('') : '<li>No rules yet</li>'}</ul></div>`).join('') : '<div class="rcard" style="color:var(--muted)">Add a camera to define alarm rules.</div>'}</div>
-      <div class="micro">History</div>
-      <div class="alarm-list">${list.length ? list.slice(0, 200).map(a => `<div class="arow"><span class="sev"></span><span class="tm">${hms(a.t)}</span><span class="ms"><b>${esc(a.rule)}</b><span>${esc(a.msg)}</span></span>${a.cls ? `<span class="tag" style="--c:${COLORS[a.cls] || COLORS.other}"><span class="legend" style="display:inline-flex;margin:0"><span><i style="--c:${COLORS[a.cls] || COLORS.other}"></i>${esc(a.cls)}</span></span></span>` : '<span></span>'}<span class="cam">${esc(a.cam)}</span></div>`).join('') : '<div class="nodata">No alarms yet. Rules fire as vehicles enter, stay in, or leave your zones.</div>'}</div>`;
-    $('#al-cam').onchange = e => { AL.cam = e.target.value; renderAlarms(); };
-    $('#al-sound').onclick = e => { const b = e.target.closest('button'); if (!b) return; soundOn = b.dataset.s === '1'; try { localStorage.setItem('airi.sound', b.dataset.s); } catch {} if (soundOn) ping(); renderAlarms(); };
-    $$('[data-edit]', root).forEach(b => b.onclick = () => { const o = cams.get(+b.dataset.edit); if (o) openEditor(o, 'alarms'); });
-  } catch (e) { console.error(e); } finally { AL.busy = false; }
-}
-
-{ const h = location.hash.slice(1); if (h === 'analytics' || h === 'alarms') setTab(h); }   // last script: everything is defined now

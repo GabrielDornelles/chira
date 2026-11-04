@@ -14,8 +14,10 @@ use std::time::Instant;
 pub struct Fired {
     pub rule_id: String,
     pub rule_name: String,
+    pub severity: String,
     pub kind: String,
     pub target_name: String,
+    #[allow(dead_code)]
     pub target_id: String,
     pub cls: String,
     pub track: u32,
@@ -58,7 +60,7 @@ impl AlarmEngine {
                             continue;
                         }
                         let msg = if is_enter { format!("{} entered {}", cap(class_name(e.cls)), e.zone_name) } else { format!("{} left {}", cap(class_name(e.cls)), e.zone_name) };
-                        out.push(Fired { rule_id: r.id.clone(), rule_name: r.name.clone(), kind: r.kind.clone(), target_name: e.zone_name.clone(), target_id: e.zone_id.clone(), cls: class_name(e.cls).into(), track: e.track, msg });
+                        out.push(Fired { rule_id: r.id.clone(), rule_name: r.name.clone(), severity: r.severity.clone(), kind: r.kind.clone(), target_name: e.zone_name.clone(), target_id: e.zone_id.clone(), cls: class_name(e.cls).into(), track: e.track, msg });
                     }
                 }
                 "dwell" => {
@@ -67,7 +69,7 @@ impl AlarmEngine {
                             let name = zones.occupancy().find(|z| z.0 == zid).map(|z| z.1.to_string()).unwrap_or_default();
                             out.push(Fired {
                                 rule_id: r.id.clone(),
-                                rule_name: r.name.clone(),
+                                rule_name: r.name.clone(), severity: r.severity.clone(),
                                 kind: "dwell".into(),
                                 target_name: name.clone(),
                                 target_id: zid.to_string(),
@@ -86,7 +88,7 @@ impl AlarmEngine {
                             *armed = false;
                             out.push(Fired {
                                 rule_id: r.id.clone(),
-                                rule_name: r.name.clone(),
+                                rule_name: r.name.clone(), severity: r.severity.clone(),
                                 kind: "occupancy".into(),
                                 target_name: name.to_string(),
                                 target_id: zid.to_string(),
@@ -104,7 +106,7 @@ impl AlarmEngine {
                         if (r.direction == "fwd" && !e.fwd) || (r.direction == "rev" && e.fwd) {
                             continue;
                         }
-                        out.push(Fired { rule_id: r.id.clone(), rule_name: r.name.clone(), kind: "cross".into(), target_name: e.line_name.clone(), target_id: e.line_id.clone(), cls: class_name(e.cls).into(), track: e.track, msg: format!("{} crossed {}", cap(class_name(e.cls)), e.line_name) });
+                        out.push(Fired { rule_id: r.id.clone(), rule_name: r.name.clone(), severity: r.severity.clone(), kind: "cross".into(), target_name: e.line_name.clone(), target_id: e.line_id.clone(), cls: class_name(e.cls).into(), track: e.track, msg: format!("{} crossed {}", cap(class_name(e.cls)), e.line_name) });
                     }
                 }
                 _ => {}

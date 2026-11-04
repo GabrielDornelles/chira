@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Regenerate the README screenshots + the hero GIF from a running Chira server.
 
-    ./run.sh &                                  # start the server first
-    python3 tools/capture.py --warm 75          # adds the two demo cameras, waits, captures into docs/img
+    DATA_DIR=/tmp/chira-docs ./run.sh &         # a clean data dir, normal (non-developer) mode
+    python3 tools/capture.py --warm 90          # adds the two demo cameras, waits, captures into docs/img
 
 Needs: google-chrome, `pip install websockets pillow`. Drives headless Chrome through the DevTools protocol.
 """
@@ -32,8 +32,10 @@ class Browser:
         subprocess.run(["pkill", "-f", PAT])
         time.sleep(0.5)
         self.prof = f"/tmp/chira-capture-{int(time.time())}"
+        # no DISPLAY / D-Bus: on a desktop session Chrome 136 can hang waiting for them in headless mode
+        env = {k: v for k, v in os.environ.items() if k not in ("DISPLAY", "DBUS_SESSION_BUS_ADDRESS")}
         self.proc = subprocess.Popen(["google-chrome", "--headless=new", "--no-sandbox", "--disable-gpu", "--hide-scrollbars", f"--window-size={w},{h}", f"--{PAT}", f"--user-data-dir={self.prof}", "about:blank"],
-                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
         for _ in range(60):
             try:
                 tabs = json.load(urllib.request.urlopen(f"http://localhost:{PORT}/json"))
@@ -115,6 +117,13 @@ async def main():
     await b.key("f")
     await b.key("l")
 
+    # 2b. the add-camera dialog
+    await b.js("openAddDialog('url'); document.querySelector('#ac-url').value = 'rtsp://user:password@192.168.1.20:554/stream1'; 1")
+    await asyncio.sleep(0.6)
+    await b.shot("add-camera.png")
+    await b.key("Escape")
+    await asyncio.sleep(0.3)
+
     # 3. editor (select the first zone) + alarm rules
     await b.move(420, 420)
     await b.key("e")
@@ -134,6 +143,10 @@ async def main():
 
     # 4. analytics + alarms tabs (toasts hidden so they don't cover the content)
     await b.js("document.querySelector('#toasts').style.display='none'; 1")
+    await b.js("document.querySelector('#bell').click(); 1")           # the alarm inbox
+    await asyncio.sleep(0.6)
+    await b.shot("inbox.png")
+    await b.js("document.body.click(); 1")
     await b.size(1600, 1150)
     await b.js("setTab('analytics'); 1")
     await asyncio.sleep(2.5)

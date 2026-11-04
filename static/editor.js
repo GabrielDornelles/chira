@@ -168,40 +168,40 @@ function draw() {
   const sel = ED.sel, hov = ED.hover;
   for (const z of ED.cfg.zones) {
     const on = sel?.id === z.id, hv = hov?.id === z.id, path = polyPath(z.points, W, H);
-    ctx.globalAlpha = on ? .22 : hv ? .16 : .1; ctx.fillStyle = on ? GOLD : '#d6d2c8'; ctx.fill(path);
-    ctx.globalAlpha = 1; ctx.lineWidth = (on ? 2 : 1.5) * d; ctx.lineJoin = 'round'; ctx.strokeStyle = on ? GOLD : 'rgba(236,232,223,.85)'; ctx.stroke(path);
+    ctx.globalAlpha = on ? .22 : hv ? .16 : .1; ctx.fillStyle = on ? ACCENT : '#d9d5e8'; ctx.fill(path);
+    ctx.globalAlpha = 1; ctx.lineWidth = (on ? 2 : 1.5) * d; ctx.lineJoin = 'round'; ctx.strokeStyle = on ? ACCENT : 'rgba(236,232,223,.85)'; ctx.stroke(path);
     const cx = z.points.reduce((s, q) => s + q[0], 0) / z.points.length * W, cy = z.points.reduce((s, q) => s + q[1], 0) / z.points.length * H;
-    pill(ctx, `${z.name}  ·  max ${z.capacity}`, cx, cy, on ? GOLD : '#ece8df', d);
+    pill(ctx, `${z.name}  ·  max ${z.capacity}`, cx, cy, on ? ACCENT : '#ebe8f4', d);
     if (on) handles(ctx, z.points, W, H, d);
   }
   for (const l of ED.cfg.lines) {
     const on = sel?.id === l.id, hv = hov?.id === l.id, x1 = l.x1 * W, y1 = l.y1 * H, x2 = l.x2 * W, y2 = l.y2 * H;
-    ctx.strokeStyle = on || hv ? GOLD_HI : GOLD; ctx.lineWidth = (on ? 2.4 : 1.8) * d; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+    ctx.strokeStyle = on || hv ? ACCENT_HI : ACCENT; ctx.lineWidth = (on ? 2.4 : 1.8) * d; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
     // arrow = the "forward" side (towards the right-hand side of start -> end)
     const mx = (x1 + x2) / 2, my = (y1 + y2) / 2, dx = x2 - x1, dy = y2 - y1, len = Math.hypot(dx, dy) || 1, nx = -dy / len, ny = dx / len, al = 26 * d;
     ctx.lineWidth = 1.6 * d; ctx.beginPath(); ctx.moveTo(mx, my); ctx.lineTo(mx + nx * al, my + ny * al); ctx.stroke();
     const tx = dx / len, ty = dy / len, tipx = mx + nx * al, tipy = my + ny * al;
     ctx.beginPath(); ctx.moveTo(tipx - nx * 7 * d + tx * 5 * d, tipy - ny * 7 * d + ty * 5 * d); ctx.lineTo(tipx, tipy); ctx.lineTo(tipx - nx * 7 * d - tx * 5 * d, tipy - ny * 7 * d - ty * 5 * d); ctx.stroke();
-    pill(ctx, l.name, mx - nx * 18 * d, my - ny * 18 * d, GOLD, d);
+    pill(ctx, l.name, mx - nx * 18 * d, my - ny * 18 * d, ACCENT, d);
     if (on) handles(ctx, [[l.x1, l.y1], [l.x2, l.y2]], W, H, d);
   }
   // drafts
   const m = ED.mouse;
   if (ED.draft?.type === 'line') {
-    const a = ED.draft.a; ctx.setLineDash([6 * d, 5 * d]); ctx.strokeStyle = GOLD; ctx.lineWidth = 1.6 * d; ctx.beginPath(); ctx.moveTo(a[0] * W, a[1] * H); if (m) ctx.lineTo(m[0] * W, m[1] * H); ctx.stroke(); ctx.setLineDash([]);
-    dot(ctx, a[0] * W, a[1] * H, d, GOLD);
+    const a = ED.draft.a; ctx.setLineDash([6 * d, 5 * d]); ctx.strokeStyle = ACCENT; ctx.lineWidth = 1.6 * d; ctx.beginPath(); ctx.moveTo(a[0] * W, a[1] * H); if (m) ctx.lineTo(m[0] * W, m[1] * H); ctx.stroke(); ctx.setLineDash([]);
+    dot(ctx, a[0] * W, a[1] * H, d, ACCENT);
   }
   if (ED.draft?.type === 'zone') {
-    const p = ED.draft.pts; ctx.strokeStyle = GOLD; ctx.lineWidth = 1.8 * d; ctx.lineJoin = 'round'; ctx.beginPath(); p.forEach((q, i) => i ? ctx.lineTo(q[0] * W, q[1] * H) : ctx.moveTo(q[0] * W, q[1] * H));
+    const p = ED.draft.pts; ctx.strokeStyle = ACCENT; ctx.lineWidth = 1.8 * d; ctx.lineJoin = 'round'; ctx.beginPath(); p.forEach((q, i) => i ? ctx.lineTo(q[0] * W, q[1] * H) : ctx.moveTo(q[0] * W, q[1] * H));
     ctx.stroke(); if (m && p.length) { ctx.setLineDash([6 * d, 5 * d]); ctx.beginPath(); ctx.moveTo(p[p.length - 1][0] * W, p[p.length - 1][1] * H); ctx.lineTo(m[0] * W, m[1] * H); ctx.stroke(); ctx.setLineDash([]); }
-    p.forEach((q, i) => dot(ctx, q[0] * W, q[1] * H, d, i === 0 && p.length >= 3 && m && dist(m[0] * W, m[1] * H, q[0] * W, q[1] * H) < 14 * d ? GOLD_HI : GOLD, i === 0 && p.length >= 3 ? 1.5 : 1));
+    p.forEach((q, i) => dot(ctx, q[0] * W, q[1] * H, d, i === 0 && p.length >= 3 && m && dist(m[0] * W, m[1] * H, q[0] * W, q[1] * H) < 14 * d ? ACCENT_HI : ACCENT, i === 0 && p.length >= 3 ? 1.5 : 1));
   }
 }
 function pill(ctx, text, x, y, color, d) {
   const w = ctx.measureText(text).width + 18 * d; ctx.fillStyle = 'rgba(10,10,12,.78)'; rr(ctx, x - w / 2, y - 11 * d, w, 22 * d, 11 * d); ctx.fill(); ctx.fillStyle = color; ctx.fillText(text, x, y + .5 * d);
 }
 function dot(ctx, x, y, d, color, k = 1) { ctx.fillStyle = 'rgba(10,10,12,.9)'; ctx.beginPath(); ctx.arc(x, y, 7 * d * k, 0, 6.3); ctx.fill(); ctx.fillStyle = color; ctx.beginPath(); ctx.arc(x, y, 4.6 * d * k, 0, 6.3); ctx.fill(); }
-function handles(ctx, p, W, H, d) { p.forEach(q => dot(ctx, q[0] * W, q[1] * H, d, GOLD_HI)); }
+function handles(ctx, p, W, H, d) { p.forEach(q => dot(ctx, q[0] * W, q[1] * H, d, ACCENT_HI)); }
 
 /* ───────── side panel ───────── */
 function chipsHtml(selected, attr) { return CLASS_LIST.map(c => `<button class="chip${selected.includes(c) ? ' on' : ''}" style="--c:${COLORS[c]}" ${attr}="${c}">${c}</button>`).join(''); }
@@ -258,10 +258,11 @@ function bindShapeFields(box) {
 function renderAlarmsPanel(box) {
   const cfg = ED.cfg, zones = cfg.zones, lines = cfg.lines;
   const targets = kind => kind === 'cross' ? lines : zones;
-  box.innerHTML = `<div class="lead">Get a notification (and a sound) when a vehicle does something in a zone. Alarms appear live and are kept in the Alarms tab.</div>` +
+  box.innerHTML = `<div class="lead">Raise an alarm when something happens in a zone or on a line. Repeats are grouped into one incident with a snapshot, so a busy road does not flood you. Pick how loud each one is.</div>` +
     cfg.alarms.map((a, i) => {
       const ts = targets(a.kind);
       return `<div class="item" style="cursor:default" data-i="${i}"><div class="row"><div class="sw${a.enabled ? ' on' : ''}" data-act="en"></div><input type="text" data-f="name" value="${esc(a.name)}" maxlength="32" style="flex:1"><button class="btn danger sm" data-act="del">×</button></div>
+        <div class="field"><label>Importance</label><select data-f="severity">${[['info', 'Info · logged only'], ['warning', 'Warning · bell and camera marker'], ['critical', 'Critical · also a pop-up and sound']].map(([v, l]) => `<option value="${v}"${(a.severity || 'warning') === v ? ' selected' : ''}>${l}</option>`).join('')}</select></div>
         <div class="field"><label>When</label><select data-f="kind">${Object.entries(KIND_LABEL).map(([k, l]) => `<option value="${k}"${k === a.kind ? ' selected' : ''}>${l}</option>`).join('')}</select></div>
         <div class="field"><label>${a.kind === 'cross' ? 'Line' : 'Zone'}</label><select data-f="target">${ts.map(t => `<option value="${t.id}"${t.id === a.target ? ' selected' : ''}>${esc(t.name)}</option>`).join('')}</select></div>
         ${a.kind === 'dwell' ? `<div class="field"><label>For at least (seconds)</label><input type="number" data-f="seconds" min="1" max="3600" value="${a.seconds || 10}"></div>` : ''}
@@ -271,7 +272,7 @@ function renderAlarmsPanel(box) {
       </div>`;
     }).join('') +
     (!zones.length && !lines.length ? '<div class="empty-note">Draw a zone or a counting line first, then add alarms for it.</div>' : '<button class="btn ghost sm" id="add-alarm">+ Add alarm</button>');
-  const ab = $('#add-alarm'); if (ab) ab.onclick = () => { const kind = zones.length ? 'dwell' : 'cross'; cfg.alarms.push({ id: uid('a'), name: `Alarm ${cfg.alarms.length + 1}`, kind, target: (kind === 'cross' ? lines : zones)[0].id, classes: [], seconds: 10, percent: 80, direction: 'any', enabled: true }); ED.dirty = true; renderPanel(); box.scrollTop = box.scrollHeight; };
+  const ab = $('#add-alarm'); if (ab) ab.onclick = () => { const kind = zones.length ? 'dwell' : 'cross'; cfg.alarms.push({ id: uid('a'), name: `Alarm ${cfg.alarms.length + 1}`, kind, target: (kind === 'cross' ? lines : zones)[0].id, classes: [], seconds: 10, percent: 80, direction: 'any', enabled: true, severity: 'warning' }); ED.dirty = true; renderPanel(); box.scrollTop = box.scrollHeight; };
   $$('.item[data-i]', box).forEach(el => {
     const a = cfg.alarms[+el.dataset.i];
     $$('[data-f]', el).forEach(f => f.addEventListener(f.tagName === 'SELECT' ? 'change' : 'input', () => {
