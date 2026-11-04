@@ -138,10 +138,11 @@ Works today: everything above, on simulated cameras (a video file streamed in re
 - [ ] persistence in SQLite instead of JSON lines
 - [ ] smoother camera hot-add (a new camera briefly drops frames while the GPU batch resizes)
 
-## Notes & licence
+## Licence & notes
 
-- No licence file yet. Note that **YOLO26 / YOLO11 weights and the Ultralytics export tool are AGPL-3.0**; the models are not
-  included and are downloaded by the export script. YOLOX and RF-DETR (N-L) are Apache-2.0.
+Chira is licensed under the [Apache License 2.0](LICENSE).
+
+- The detection models are **not** part of this repository. The default setup downloads YOLO26 through the Ultralytics export tool, and **YOLO26 / YOLO11 weights and that tool are AGPL-3.0**. Chira's own code does not link them, but check their terms before shipping a product that bundles the weights. YOLOX and RF-DETR (N-L) are Apache-2.0.
 - The screenshots use a traffic clip from YouTube that is **not** in this repository; bring your own video.
 - Credits: [Ultralytics YOLO26](https://github.com/ultralytics/ultralytics), [ByteTrack](https://github.com/ifzhang/ByteTrack),
   [ONNX Runtime](https://onnxruntime.ai) + [`ort`](https://github.com/pykeio/ort), [axum](https://github.com/tokio-rs/axum), [TensorRT](https://developer.nvidia.com/tensorrt).
