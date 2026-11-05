@@ -10,7 +10,7 @@ use crate::config::{self, class_name, AlarmRule, CameraConfig, LineCfg, ZoneCfg}
 use crate::counter::LineCounter;
 use crate::zones::{ZoneEngine, ZoneEvKind, ZoneSnap};
 use crate::batcher::{Batcher, Job};
-use crate::detector::{FRAME_BYTES, H, W};
+use crate::detector::{dims, DISPLAY_W};
 use crate::tracker::ByteTracker;
 use parking_lot::{Mutex, RwLock};
 use serde::Serialize;
@@ -26,9 +26,30 @@ pub fn video_path() -> String {
     std::env::var("VIDEO").unwrap_or_else(|_| "videos/demo.mp4".into())
 }
 pub fn model_path() -> String {
-    std::env::var("MODEL").unwrap_or_else(|_| "models/yolo26m_544x960.onnx".into())
+    crate::settings::active_model()
 }
-pub const VIEW_H: usize = 540;
+
+/// The 16:9 picture inside the model input -> what the browser draws (960x540), cheap nearest-neighbour when it is larger.
+fn display_rgb(frame: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+    let d = dims();
+    if d.w == DISPLAY_W {
+        return std::borrow::Cow::Borrowed(&frame[..DISPLAY_W * d.view_h * 3]);
+    }
+    let dh = (d.view_h * DISPLAY_W / d.w).max(1);
+    let xs: Vec<usize> = (0..DISPLAY_W).map(|x| (x * d.w + d.w / 2) / DISPLAY_W).collect();
+    let mut out = Vec::with_capacity(DISPLAY_W * dh * 3);
+    for y in 0..dh {
+        let row = &frame[((y * d.view_h + d.view_h / 2) / dh).min(d.view_h - 1) * d.w * 3..];
+        for &x in &xs {
+            out.extend_from_slice(&row[x * 3..x * 3 + 3]);
+        }
+    }
+    std::borrow::Cow::Owned(out)
+}
+fn display_h() -> usize {
+    let d = dims();
+    if d.w == DISPLAY_W { d.view_h } else { (d.view_h * DISPLAY_W / d.w).max(1) }
+}
 
 pub struct Setup {
     pub id: u32,
@@ -48,7 +69,7 @@ pub fn default_config(setup: u32) -> CameraConfig {
         id: id.into(), name: name.into(), kind: kind.into(), target: target.into(), classes: classes.iter().map(|c| c.to_string()).collect(),
         seconds, percent, direction: "any".into(), enabled: true, severity: sev.into(),
     };
-    let classes: Vec<String> = ["car", "truck", "bus", "motorcycle"].iter().map(|c| c.to_string()).collect();
+    let classes: Vec<String> = crate::config::DEFAULT_CLASSES.iter().map(|c| c.to_string()).collect();
     if setup == 1 {
         CameraConfig {
             classes,
@@ -200,7 +221,7 @@ pub fn start(id: u32, name: String, key: String, src: Src, fps: u32, batcher: Ar
 
 /// A new real camera starts empty: the person draws their own lines and zones.
 pub fn default_url_config() -> CameraConfig {
-    CameraConfig { classes: ["car", "truck", "bus", "motorcycle"].iter().map(|c| c.to_string()).collect(), lines: vec![], zones: vec![], alarms: vec![] }
+    CameraConfig { classes: crate::settings::current().default_classes, lines: vec![], zones: vec![], alarms: vec![] }
 }
 
 fn run(cam: Arc<Camera>, src: Src, batcher: Arc<Batcher>) -> anyhow::Result<()> {
@@ -210,15 +231,17 @@ fn run(cam: Arc<Camera>, src: Src, batcher: Arc<Batcher>) -> anyhow::Result<()> 
     r
 }
 
-/// decode + scale to 960x540 (letterboxed if the camera is not 16:9) + pad to 544 rows, raw RGB on a pipe
+/// decode + scale to the model's picture size (letterboxed if the camera is not 16:9) + pad to the model's rows, raw RGB on a pipe
 fn spawn_reader(input: &[String]) -> std::io::Result<Child> {
+    let d = dims();
+    let (w, h, view_h) = (d.w, d.h, d.view_h);
     Command::new("ffmpeg")
         .args(["-loglevel", "error", "-nostdin"])
         .args(input)
         .args([
             "-an",
             "-vf",
-            &format!("scale={W}:{VIEW_H}:flags=fast_bilinear:force_original_aspect_ratio=decrease,pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:color=0x727272"),
+            &format!("scale={w}:{view_h}:flags=fast_bilinear:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=0x727272"),
             "-pix_fmt",
             "rgb24",
             "-f",
@@ -309,7 +332,7 @@ fn run_inner(cam: &Arc<Camera>, src: Src, batcher: &Arc<Batcher>, rx: std::sync:
                 first = false;
                 let mut got_frame = false;
                 loop {
-                    let mut buf = vec![0u8; FRAME_BYTES];
+                    let mut buf = vec![0u8; dims().frame_bytes()];
                     if stdout.read_exact(&mut buf).is_err() {
                         break;
                     }
@@ -363,14 +386,16 @@ fn run_inner(cam: &Arc<Camera>, src: Src, batcher: &Arc<Batcher>, rx: std::sync:
                     g.take()
                 };
                 let Some((rgb, meta)) = item else { continue };
-                let min = Duration::from_millis(33);
-                if last.elapsed() < min {
-                    std::thread::sleep(min - last.elapsed());
+                if cam.tx.receiver_count() == 0 {
+                    continue;   // nobody is watching: skip the downscale + JPEG (detection and alarms keep running)
                 }
+                let min = Duration::from_millis(33);
+                std::thread::sleep(min.saturating_sub(last.elapsed()));   // (two separate elapsed() reads could underflow and panic)
                 last = Instant::now();
                 let mut jpg = Vec::with_capacity(200_000);
                 let enc = jpeg_encoder::Encoder::new(&mut jpg, 82);
-                if enc.encode(&rgb[..W * VIEW_H * 3], W as u16, VIEW_H as u16, jpeg_encoder::ColorType::Rgb).is_err() {
+                let shown = display_rgb(&rgb);
+                if enc.encode(&shown, DISPLAY_W as u16, display_h() as u16, jpeg_encoder::ColorType::Rgb).is_err() {
                     continue;
                 }
                 let json = serde_json::to_vec(&meta).unwrap();
@@ -393,8 +418,9 @@ fn run_inner(cam: &Arc<Camera>, src: Src, batcher: &Arc<Batcher>, rx: std::sync:
     // 5. inference loop (this thread)
     let cam = cam.clone();
     let mut tracker = ByteTracker::new();
-    let mut counter = LineCounter::new(vec![], W as f32, VIEW_H as f32);
-    let mut zones = ZoneEngine::new(&[], W as f32, VIEW_H as f32);
+    let dm = dims();
+    let mut counter = LineCounter::new(vec![], dm.w as f32, dm.view_h as f32);
+    let mut zones = ZoneEngine::new(&[], dm.w as f32, dm.view_h as f32);
     let mut alarms = AlarmEngine::default();
     let mut allowed = [true; 256];
     let mut seen_ver = 0u64;
@@ -422,6 +448,7 @@ fn run_inner(cam: &Arc<Camera>, src: Src, batcher: &Arc<Batcher>, rx: std::sync:
             seen_ver = ver;
         }
         dets.retain(|d| allowed[d.cls as usize]);
+        tracker.high_thresh = crate::settings::confidence();
         let tracks = tracker.update(&dets);
         let crossings = counter.update(&tracks);
         let now = Instant::now();
@@ -446,8 +473,8 @@ fn run_inner(cam: &Arc<Camera>, src: Src, batcher: &Arc<Batcher>, rx: std::sync:
         // hand the frame to the encoder (overwrites an unsent one)
         let meta = Meta {
             frame: frame_no,
-            w: W,
-            h: VIEW_H,
+            w: dm.w,
+            h: dm.view_h,
             boxes: tracks
                 .iter()
                 .map(|t| BoxOut { id: t.id, b: t.bbox, c: class_name(t.cls), s: t.score })
@@ -509,7 +536,8 @@ fn publish(cam: &Camera, frame: &[u8], tracks: &[crate::tracker::TrackOut], cros
         e.msg = f.msg.clone();
         e.dir = f.kind.clone();
         cam.hub.push(e);
-        let bbox = tracks.iter().find(|t| t.id == f.track && f.track != 0).map(|t| t.bbox);
+        let k = dims().to_display();
+        let bbox = tracks.iter().find(|t| t.id == f.track && f.track != 0).map(|t| [t.bbox[0] * k, t.bbox[1] * k, t.bbox[2] * k, t.bbox[3] * k]);   // in 960x540 pixels, like the snapshot
         cam.hub.fire(
             Fire {
                 cam: cam.name.clone(), rule_id: f.rule_id.clone(), rule: f.rule_name.clone(), kind: f.kind.clone(), severity: f.severity.clone(),
@@ -518,7 +546,7 @@ fn publish(cam: &Camera, frame: &[u8], tracks: &[crate::tracker::TrackOut], cros
             || {
                 // a snapshot is only taken for the first firing of an incident
                 let mut jpg = Vec::with_capacity(120_000);
-                jpeg_encoder::Encoder::new(&mut jpg, 80).encode(&frame[..W * VIEW_H * 3], W as u16, VIEW_H as u16, jpeg_encoder::ColorType::Rgb).ok()?;
+                jpeg_encoder::Encoder::new(&mut jpg, 80).encode(&display_rgb(frame), DISPLAY_W as u16, display_h() as u16, jpeg_encoder::ColorType::Rgb).ok()?;
                 Some(jpg)
             },
         );

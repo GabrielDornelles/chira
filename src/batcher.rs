@@ -4,7 +4,7 @@
 //! camera its own detections. Under light load batches are size 1; when the GPU is the bottleneck they
 //! grow by themselves, which is exactly when batching pays off.
 
-use crate::detector::{Detector, FRAME_BYTES};
+use crate::detector::{dims, Detector};
 use crate::pipeline::{set, Stats};
 use crate::tracker::Det;
 use parking_lot::{Condvar, Mutex};
@@ -132,9 +132,10 @@ impl Batcher {
             }
             // 4. one GPU call; slots without a fresh frame keep stale pixels (padding, result discarded)
             let n = jobs.len();
-            input.resize(FRAME_BYTES * target, 114);
+            let fb = dims().frame_bytes();
+            input.resize(fb * target, 114);
             for (i, (_, j, _)) in jobs.iter().enumerate() {
-                input[i * FRAME_BYTES..(i + 1) * FRAME_BYTES].copy_from_slice(&j.frame);
+                input[i * fb..(i + 1) * fb].copy_from_slice(&j.frame);
             }
             let t0 = Instant::now();
             let res = det.detect(&input, target);

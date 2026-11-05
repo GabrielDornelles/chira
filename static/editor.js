@@ -3,7 +3,7 @@
    set zone capacity and define alarm rules. Everything is stored normalised (0..1). */
 
 let ED = null;
-const KIND_LABEL = { enter: 'A vehicle enters the zone', exit: 'A vehicle leaves the zone', dwell: 'A vehicle stays in the zone for…', occupancy: 'The zone is more than … full', cross: 'A vehicle crosses a line' };
+const KIND_LABEL = { enter: 'Something enters the zone', exit: 'Something leaves the zone', dwell: 'Something stays in the zone for…', occupancy: 'The zone is more than … full', cross: 'A vehicle crosses a line' };
 const uid = p => p + Math.random().toString(36).slice(2, 7);
 const clamp01 = v => Math.max(0, Math.min(1, v));
 
@@ -216,7 +216,7 @@ function renderPanel() {
       const on = ED.sel?.id === x.id;
       return `<div class="item${on ? ' sel' : ''}" data-sel="${type}:${x.id}"><div class="row"><b>${esc(x.name)}</b><span class="tag">${type === 'zone' ? `max ${x.capacity}` : 'line'}</span></div>${on ? editFields(type, x) : ''}</div>`;
     };
-    box.innerHTML = `<div class="lead">Counting lines count each vehicle once as it crosses. Zones measure how full an area is (vehicles inside ÷ max) and drive dwell-time alarms.</div>
+    box.innerHTML = `<div class="lead">Counting lines count each object once as it crosses. Zones measure how full an area is (objects inside ÷ max) and drive dwell-time alarms.</div>
       ${cfg.zones.map(z => item('zone', z)).join('')}${cfg.lines.map(l => item('line', l)).join('')}
       ${!cfg.zones.length && !cfg.lines.length ? '<div class="empty-note">Nothing drawn yet.<br>Pick a tool below the picture and click on it.</div>' : ''}
       <div class="two"><button class="btn ghost sm" data-add="line">+ Counting line</button><button class="btn ghost sm" data-add="zone">+ Zone</button></div>`;
@@ -235,7 +235,7 @@ function editFields(type, x) {
     <div class="lead" style="margin-top:10px">The arrow shows the <b>forward</b> direction.</div>
     <div class="two" style="margin-top:6px"><button class="btn ghost sm" data-act="flip">Flip direction</button><button class="btn danger sm" data-act="del">Delete</button></div>`;
   return `<div class="field"><label>Name</label><input type="text" data-f="name" value="${esc(x.name)}" maxlength="24"></div>
-    <div class="field"><label>Max vehicles (100% = full)</label><input type="number" data-f="capacity" min="1" max="999" value="${x.capacity}"></div>
+    <div class="field"><label>Max objects (100% = full)</label><input type="number" data-f="capacity" min="1" max="999" value="${x.capacity}"></div>
     <div class="field"><label>Counts toward occupancy</label><div class="chips">${chipsHtml(x.classes, 'data-zc')}</div><div class="lead" style="margin:2px 0 0">${x.classes.length ? '' : 'All detected classes.'}</div></div>
     <div style="margin-top:12px"><button class="btn danger sm" data-act="del">Delete zone</button></div>`;
 }
@@ -268,7 +268,7 @@ function renderAlarmsPanel(box) {
         ${a.kind === 'dwell' ? `<div class="field"><label>For at least (seconds)</label><input type="number" data-f="seconds" min="1" max="3600" value="${a.seconds || 10}"></div>` : ''}
         ${a.kind === 'occupancy' ? `<div class="field"><label>Full above (%)</label><input type="number" data-f="percent" min="1" max="200" value="${a.percent || 80}"></div>` : ''}
         ${a.kind === 'cross' ? `<div class="field"><label>Direction</label><select data-f="direction">${[['any', 'Either way'], ['fwd', 'Forward (arrow)'], ['rev', 'Backward']].map(([v, l]) => `<option value="${v}"${(a.direction || 'any') === v ? ' selected' : ''}>${l}</option>`).join('')}</select></div>` : ''}
-        ${a.kind !== 'occupancy' ? `<div class="field"><label>Vehicle types ${a.classes.length ? '' : '(any)'}</label><div class="chips">${chipsHtml(a.classes, 'data-ac')}</div></div>` : ''}
+        ${a.kind !== 'occupancy' ? `<div class="field"><label>Object types ${a.classes.length ? '' : '(any)'}</label><div class="chips">${chipsHtml(a.classes, 'data-ac')}</div></div>` : ''}
       </div>`;
     }).join('') +
     (!zones.length && !lines.length ? '<div class="empty-note">Draw a zone or a counting line first, then add alarms for it.</div>' : '<button class="btn ghost sm" id="add-alarm">+ Add alarm</button>');

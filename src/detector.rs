@@ -8,9 +8,34 @@ use ort::execution_providers::{CUDAExecutionProvider, TensorRTExecutionProvider}
 use ort::session::{builder::GraphOptimizationLevel, Session};
 use ort::value::TensorRef;
 
-pub const W: usize = 960;
-pub const H: usize = 544; // 540 video rows + 4 rows of padding (multiple of 32)
-pub const FRAME_BYTES: usize = W * H * 3;
+/// What the browser always receives and draws on (whatever the model resolution is).
+pub const DISPLAY_W: usize = 960;
+
+/// The processing resolution = the input size the loaded model was exported with (e.g. 544x960, 736x1280, 1088x1920).
+/// `view_h` is the 16:9 picture inside it; the rows below are grey padding to reach a multiple of 32.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Dims {
+    pub w: usize,
+    pub h: usize,
+    pub view_h: usize,
+}
+impl Dims {
+    pub fn new(h: usize, w: usize) -> Self {
+        Self { w, h, view_h: (w * 9 / 16 / 2 * 2).min(h) }
+    }
+    pub fn frame_bytes(&self) -> usize {
+        self.w * self.h * 3
+    }
+    /// model pixels -> display pixels
+    pub fn to_display(&self) -> f32 {
+        DISPLAY_W as f32 / self.w as f32
+    }
+}
+static DIMS: std::sync::OnceLock<Dims> = std::sync::OnceLock::new();
+/// Valid once a `Detector` has been created (the engine is ready before any camera starts).
+pub fn dims() -> Dims {
+    *DIMS.get().unwrap_or(&Dims { w: 960, h: 544, view_h: 540 })
+}
 
 /// Human-readable engine state for the UI ("Compiling TensorRT engine 2/4 ...").
 pub static STATUS: parking_lot::Mutex<String> = parking_lot::const_mutex(String::new());
@@ -31,6 +56,13 @@ impl Detector {
             .with_memory_pattern(false)?
             .with_intra_threads(1)?;
         let session = if std::env::var("EP").as_deref() == Ok("trt") {
+            // TensorRT's own cache key ignores constants in the graph (e.g. the class filter), so a re-exported or patched model
+            // would silently reuse a stale engine. Give every model file its own engine directory: name + size + mtime.
+            let meta = std::fs::metadata(model).ok();
+            let stamp = meta.as_ref().map(|m| (m.len(), m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs()))).unwrap_or((0, 0));
+            let stem = std::path::Path::new(model).file_stem().and_then(|s| s.to_str()).unwrap_or("model");
+            let engines = format!("trt_cache/{stem}-{:x}-{:x}", stamp.0, stamp.1);
+            std::fs::create_dir_all(&engines).ok();
             std::fs::create_dir_all("trt_cache").ok();
             builder
                 .with_execution_providers([
@@ -38,7 +70,7 @@ impl Detector {
                         .with_device_id(0)
                         .with_fp16(true)
                         .with_engine_cache(true)
-                        .with_engine_cache_path("trt_cache")
+                        .with_engine_cache_path(engines.as_str())
                         .with_timing_cache(true)
                         .with_timing_cache_path("trt_cache")
                         .with_max_workspace_size(4 << 30)
@@ -52,6 +84,13 @@ impl Detector {
                 .with_execution_providers([CUDAExecutionProvider::default().with_device_id(0).build().error_on_failure()])?
                 .commit_from_file(model)?
         };
+        // the processing resolution comes from the model file itself
+        let shape = session.inputs.first().and_then(|i| i.input_type.tensor_shape()).map(|sh| sh.to_vec()).unwrap_or_default();
+        if let [_, h, w, 3] = shape[..] {
+            if h > 0 && w > 0 {
+                let _ = DIMS.set(Dims::new(h as usize, w as usize));
+            }
+        }
         let mut d = Self { session };
         let trt = std::env::var("EP").as_deref() == Ok("trt");
         set_status(if trt { format!("Compiling TensorRT engine 1/{max_batch} (one-time, cached afterwards)") } else { "Warming up".into() });
@@ -70,17 +109,18 @@ impl Detector {
     /// First run of a new input shape is slow (cuDNN plans); changing shape between calls costs ~150 ms,
     /// so the batcher keeps the shape fixed and warms each new one here.
     pub fn warm(&mut self, b: usize) -> Result<()> {
-        let blank = vec![114u8; FRAME_BYTES * b];
+        let blank = vec![114u8; dims().frame_bytes() * b];
         for _ in 0..3 {
             self.detect(&blank, b)?;
         }
         Ok(())
     }
 
-    /// `rgb`: `b` frames, each W*H*3 interleaved RGB, back to back.
+    /// `rgb`: `b` frames, each w*h*3 interleaved RGB, back to back.
     /// Returns, per frame, detections (score >= 0.1) in frame pixels after NMS.
     pub fn detect(&mut self, rgb: &[u8], b: usize) -> Result<Vec<Vec<Det>>> {
-        let tensor = TensorRef::from_array_view(([b, H, W, 3], rgb))?;
+        let dm = dims();
+        let tensor = TensorRef::from_array_view(([b, dm.h, dm.w, 3], rgb))?;
         let outputs = self.session.run(ort::inputs!["images" => tensor])?;
         let (shape, data) = outputs["output"].try_extract_tensor::<f32>()?;
         let k = shape[1] as usize;
@@ -94,7 +134,7 @@ impl Detector {
                 }
                 cands.push(Det { x1: row[0], y1: row[1], x2: row[2], y2: row[3], score: row[4], cls: row[5] as u8 });
             }
-            all.push(nms(cands, 0.45));
+            all.push(nms(cands, crate::settings::overlap()));
         }
         Ok(all)
     }

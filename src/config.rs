@@ -3,7 +3,14 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const CLASSES: [(&str, u8); 5] = [("car", 2), ("truck", 7), ("bus", 5), ("motorcycle", 3), ("bicycle", 1)];
+/// Detectable classes (COCO ids), grouped for the UI: people, road vehicles, other vehicles, animals, carried items.
+/// The other ~65 COCO classes (furniture, food, kitchenware...) are deliberately left out: noise for a camera app.
+pub const CLASSES: [(&str, u8); 15] = [
+    ("person", 0), ("car", 2), ("truck", 7), ("bus", 5), ("motorcycle", 3), ("bicycle", 1), ("train", 6), ("boat", 8),
+    ("dog", 16), ("cat", 15), ("bird", 14), ("horse", 17), ("backpack", 24), ("handbag", 26), ("suitcase", 28),
+];
+/// What a camera tracks until the person chooses otherwise (the traffic demos).
+pub const DEFAULT_CLASSES: [&str; 4] = ["car", "truck", "bus", "motorcycle"];
 
 pub fn class_name(c: u8) -> &'static str {
     CLASSES.iter().find(|(_, id)| *id == c).map(|(n, _)| *n).unwrap_or("other")
@@ -89,7 +96,7 @@ impl CameraConfig {
         self.classes.retain(|c| CLASSES.iter().any(|(n, _)| n == c));
         self.classes.dedup();
         if self.classes.is_empty() {
-            self.classes = CLASSES.iter().take(4).map(|(n, _)| n.to_string()).collect();
+            self.classes = DEFAULT_CLASSES.iter().map(|n| n.to_string()).collect();
         }
         let cl = |v: f32| v.clamp(0.0, 1.0);
         for (i, l) in self.lines.iter_mut().enumerate() {

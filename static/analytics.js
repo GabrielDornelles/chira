@@ -142,7 +142,7 @@ async function renderAnalytics(force) {
     const incs = INC.list.filter(i => i.last_t >= A.t0 && (AN.cam === 'all' || i.cam === AN.cam) && SEV[i.severity] >= 1); kp('k-alarms', incs.length, '', incs.filter(i => !i.acked_t).length ? `${incs.filter(i => !i.acked_t).length} not acknowledged` : 'all handled');
     $('#lg-flow').innerHTML = legendHtml(CLASS_LIST.filter((c, i) => A.flow[i].some(v => v)).map(c => [COLORS[c], cap(c)]));
     $('#lg-occ').innerHTML = A.series.size > 1 ? legendHtml([...A.series.keys()].map((n, i) => [ZONE_COLORS[i % 3], n, true])) : '';
-    $('#flow-sub').textContent = `Vehicles crossing counting lines · ${RANGES[AN.range][1] / 1000 >= 60 ? RANGES[AN.range][1] / 60000 + ' min' : RANGES[AN.range][1] / 1000 + ' s'} bins`;
+    $('#flow-sub').textContent = `Objects crossing counting lines · ${RANGES[AN.range][1] / 1000 >= 60 ? RANGES[AN.range][1] / 60000 + ' min' : RANGES[AN.range][1] / 1000 + ' s'} bins`;
     const flowHost = $('#c-flow'); flowHost.classList.toggle('hide', AN.table);
     $('#t-flow').classList.toggle('hide', !AN.table); $('#tbl-link').textContent = AN.table ? 'Show chart' : 'Show table';
     if (AN.table) tableFlow($('#t-flow'), A); else chartFlow(flowHost, A);
@@ -151,21 +151,21 @@ async function renderAnalytics(force) {
 }
 
 function tableFlow(host, A) {
-  const rows = [];
-  for (let i = A.N - 1; i >= 0; i--) { const v = CLASS_LIST.map((c, ci) => A.flow[ci][i]), t = v.reduce((a, b) => a + b, 0); if (t) rows.push(`<tr><td>${hms(A.t0 + i * A.bin)}</td>${v.map(x => `<td>${x || ''}</td>`).join('')}<td>${t}</td></tr>`); }
-  host.innerHTML = `<div class="tbl"><table><thead class="micro"><tr><th>Time</th>${CLASS_LIST.map(c => `<th>${c}</th>`).join('')}<th>Total</th></tr></thead><tbody>${rows.join('') || '<tr><td colspan="7" class="nodata">No crossings</td></tr>'}</tbody></table></div>`;
+  const rows = [], used = CLASS_LIST.map((c, ci) => A.flow[ci].some(v => v));   // only classes that actually crossed
+  for (let i = A.N - 1; i >= 0; i--) { const v = CLASS_LIST.map((c, ci) => A.flow[ci][i]).filter((x, ci) => used[ci]), t = v.reduce((a, b) => a + b, 0); if (t) rows.push(`<tr><td>${hms(A.t0 + i * A.bin)}</td>${v.map(x => `<td>${x || ''}</td>`).join('')}<td>${t}</td></tr>`); }
+  host.innerHTML = `<div class="tbl"><table><thead class="micro"><tr><th>Time</th>${CLASS_LIST.filter((c, ci) => used[ci]).map(c => `<th>${c}</th>`).join('')}<th>Total</th></tr></thead><tbody>${rows.join('') || '<tr><td colspan="7" class="nodata">No crossings</td></tr>'}</tbody></table></div>`;
 }
 
 function buildAnalytics(root) {
   root.innerHTML = `
     <h1>Analytics</h1>
     <div class="filters"><select id="an-cam"></select><div class="segbtn" id="an-range">${Object.entries(RANGES).map(([k, v]) => `<button data-r="${k}"${k === AN.range ? ' class="on"' : ''}>${v[2]}</button>`).join('')}</div><span class="micro" id="an-live" style="margin-left:auto">auto-refresh · 5 s</span></div>
-    <div class="kpis">${[['k-total', 'Vehicles counted'], ['k-rate', 'Current rate'], ['k-peak', 'Peak zone occupancy'], ['k-dwell', 'Average dwell time'], ['k-alarms', 'Alarm incidents']].map(([id, l]) => `<div class="kpi" id="${id}"><span class="micro">${l}</span><b>–</b><div class="d"></div></div>`).join('')}</div>
+    <div class="kpis">${[['k-total', 'Objects counted'], ['k-rate', 'Current rate'], ['k-peak', 'Peak zone occupancy'], ['k-dwell', 'Average dwell time'], ['k-alarms', 'Alarm incidents']].map(([id, l]) => `<div class="kpi" id="${id}"><span class="micro">${l}</span><b>–</b><div class="d"></div></div>`).join('')}</div>
     <div class="panels">
       <div class="panel w8"><div class="head"><div><h3>Traffic flow</h3><div class="sub" id="flow-sub"></div></div><a class="tablelink" id="tbl-link">Show table</a></div><div id="lg-flow"></div><div class="chart" id="c-flow"></div><div id="t-flow" class="hide"></div></div>
-      <div class="panel w4"><h3>Vehicle mix</h3><div class="sub">Share of counted vehicles</div><div class="chart" id="c-mix"></div></div>
+      <div class="panel w4"><h3>Class mix</h3><div class="sub">Share of counted objects</div><div class="chart" id="c-mix"></div></div>
       <div class="panel w8"><h3>Zone occupancy</h3><div class="sub">Peak % of capacity per interval</div><div id="lg-occ"></div><div class="chart" id="c-occ"></div></div>
-      <div class="panel w4"><h3>Dwell time</h3><div class="sub">How long vehicles stayed in zones</div><div class="chart" id="c-dwell"></div></div>
+      <div class="panel w4"><h3>Dwell time</h3><div class="sub">How long objects stayed in zones</div><div class="chart" id="c-dwell"></div></div>
     </div>`;
   $('#an-cam').onchange = e => { AN.cam = e.target.value; renderAnalytics(); };
   $('#an-range').onclick = e => { const b = e.target.closest('button'); if (!b) return; AN.range = b.dataset.r; $$('#an-range button').forEach(x => x.classList.toggle('on', x === b)); renderAnalytics(); };

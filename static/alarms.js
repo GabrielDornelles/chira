@@ -9,7 +9,7 @@ const AL = { cam: 'all', view: 'attention', sev: 'all', cfgs: [], cfgAt: 0, menu
 const SNOOZES = [[15, '15 minutes'], [60, '1 hour'], [480, '8 hours'], [1440, '24 hours']];
 
 function ruleText(r, cfg) {
-  const z = cfg.zones.find(z => z.id === r.target), l = cfg.lines.find(l => l.id === r.target), who = r.classes.length ? r.classes.map(cap).join(' / ') : 'Any vehicle';
+  const z = cfg.zones.find(z => z.id === r.target), l = cfg.lines.find(l => l.id === r.target), who = r.classes.length ? r.classes.map(cap).join(' / ') : 'Anything';
   const tn = (z || l)?.name || '?';
   return { enter: `${who} enters <b>${esc(tn)}</b>`, exit: `${who} leaves <b>${esc(tn)}</b>`, dwell: `${who} stays in <b>${esc(tn)}</b> ≥ ${r.seconds} s`, occupancy: `<b>${esc(tn)}</b> is ≥ ${r.percent}% full`, cross: `${who} crosses <b>${esc(tn)}</b>${r.direction === 'fwd' ? ' (forward)' : r.direction === 'rev' ? ' (backward)' : ''}` }[r.kind] || r.kind;
 }
@@ -46,6 +46,62 @@ async function loadRuleCfgs(force) {
   AL.cfgs = await Promise.all([...cams.values()].map(o => fetch(`/api/config/${o.id}`).then(r => r.json()).then(j => ({ o, j }))));
 }
 
+/* The page is built once. After that only the parts that changed are touched: cards are matched by incident id, so a new
+   incident slides in on top and everything else stays exactly where (and as) it was: no re-render, no image reload, no flash. */
+const tpl = document.createElement('template');
+const mk = h => { tpl.innerHTML = h.trim(); return tpl.content.firstElementChild; };
+const setHtml = (el, h) => { if (el && el._h !== h) { el._h = h; el.innerHTML = h; } };
+
+function alShell(root) {
+  const notifyOpts = [['quiet', 'Critical only'], ['all', 'Warnings too'], ['off', 'Off']];
+  root.innerHTML = `
+    <div class="al-top"><h1>Alarms</h1><span class="sum" id="al-sum"></span></div>
+    <div class="al-bar">
+      <div class="segbtn" id="al-view">${[['attention', 'Needs attention'], ['all', 'All'], ['acked', 'Acknowledged']].map(([k, l]) => `<button data-v="${k}">${l} · <span data-c="${k}">0</span></button>`).join('')}</div>
+      <select id="al-cam" style="width:auto;min-width:170px;border-radius:99px"></select>
+      <select id="al-sev" style="width:auto;min-width:150px;border-radius:99px"><option value="all">Every severity</option><option value="warning">Warning and above</option><option value="critical">Critical only</option></select>
+      <span class="grow"></span>
+      <button class="btn sm" id="al-ackall">Acknowledge all</button>
+    </div>
+    <div id="al-snz"></div>
+    <div id="al-list"></div>
+    <div class="inc-group" style="margin-top:34px"><span class="micro">Notifications on this screen</span>
+      <div class="al-bar" style="margin-top:10px"><div class="segbtn" id="al-notify">${notifyOpts.map(([k, l]) => `<button data-n="${k}">${l}</button>`).join('')}</div>
+      <div class="segbtn" id="al-sound"><button data-s="1">Sound on</button><button data-s="0">Sound off</button></div>
+      <span class="hintline" style="color:var(--faint);font-size:12px">Only brand-new incidents can interrupt you. Repeats join the open incident silently.</span></div></div>
+    <details class="rules"><summary><span class="micro">Alarm rules</span></summary><div class="rulecards" id="al-rules"></div></details>`;
+  root.dataset.ready = '1';
+  bindAlarms(root);
+}
+
+/* groups: [{k, items:[{id, html}]}]. Reuses cards whose html did not change; returns how many new ones appeared. */
+function syncList(box, groups, animate) {
+  const old = new Map([...box.children].map(g => [g.dataset.g, g]));
+  let added = 0;
+  groups.forEach((g, gi) => {
+    let ge = old.get(g.k); old.delete(g.k);
+    if (!ge) ge = mk(`<div class="inc-group" data-g="${esc(g.k)}">${g.k ? `<span class="micro">${esc(g.k)}</span>` : ''}<div class="inc-list"></div></div>`);
+    if (box.children[gi] !== ge) box.insertBefore(ge, box.children[gi] || null);
+    const list = ge.lastElementChild, cur = new Map([...list.children].map(c => [c.dataset.id, c]));
+    g.items.forEach((it, n) => {
+      let el = cur.get(it.id); cur.delete(it.id);
+      if (!el || el._h !== it.html) {
+        const ne = mk(it.html); ne._h = it.html;
+        if (el) {
+          const th = el.querySelector('.thumb[data-zoom]'), nt = ne.querySelector('.thumb[data-zoom]');
+          if (th && nt && th.dataset.zoom === nt.dataset.zoom) nt.replaceWith(th);   // keep the loaded snapshot
+          el.replaceWith(ne);
+        } else if (animate && it.id !== 'empty') { ne.classList.add('enter'); added++; }
+        el = ne;
+      }
+      if (list.children[n] !== el) list.insertBefore(el, list.children[n] || null);
+    });
+    cur.forEach(c => c.remove());
+  });
+  old.forEach(g => g.remove());
+  return added;
+}
+
 function renderAlarms(force) {
   if (AL.raf) return;
   AL.raf = requestAnimationFrame(async () => {
@@ -54,6 +110,7 @@ function renderAlarms(force) {
     if (AL.menu) return;                       // do not yank a menu away while it is open
     const root = $('#view-alarms');
     try { await loadRuleCfgs(force); } catch {}
+    if (!root.dataset.ready) alShell(root);
     const all = INC.list, camNames = [...new Set([...all.map(i => i.cam), ...[...cams.values()].map(o => o.name)])].sort();
     if (AL.cam !== 'all' && !camNames.includes(AL.cam)) AL.cam = 'all';
     const pend = all.filter(needsAttention), crit = pend.filter(i => i.severity === 'critical').length;
@@ -61,40 +118,39 @@ function renderAlarms(force) {
     const counts = { attention: list.filter(needsAttention).length, all: list.length, acked: list.filter(i => i.acked_t).length };
     if (AL.view === 'attention') list = list.filter(needsAttention);
     else if (AL.view === 'acked') list = list.filter(i => i.acked_t);
-    list.sort((a, b) => (!a.acked_t === !b.acked_t ? 0 : a.acked_t ? 1 : -1) || SEV[b.severity] - SEV[a.severity] || b.last_t - a.last_t);
+    list.sort((a, b) => (!a.acked_t === !b.acked_t ? 0 : a.acked_t ? 1 : -1) || SEV[b.severity] - SEV[a.severity] || b.first_t - a.first_t);   // by when it started, so repeats never shuffle the list
 
-    let body = '';
-    if (!list.length) {
-      body = AL.view === 'attention'
-        ? `<div class="allclear"><svg viewBox="0 0 24 24"><path d="M12 0C13 8 16 11 24 12C16 13 13 16 12 24C11 16 8 13 0 12C8 11 11 8 12 0Z"/></svg><b>All clear</b>Nothing needs your attention.${all.length ? ' Handled alarms are under “All”.' : ' Alarms from your rules will show up here, grouped, with a snapshot.'}</div>`
-        : '<div class="allclear"><b>Nothing here</b>No alarms match these filters.</div>';
-    } else if (AL.view === 'attention') {
-      body = `<div class="inc-list">${list.map(incHtml).join('')}</div>`;
-    } else {
-      const groups = new Map(); for (const i of list) { const k = i.acked_t ? dayKey(i.last_t) : 'Needs attention'; (groups.get(k) || groups.set(k, []).get(k)).push(i); }
-      body = [...groups].map(([k, v]) => `<div class="inc-group"><span class="micro">${esc(k)}</span><div class="inc-list">${v.slice(0, 80).map(incHtml).join('')}</div></div>`).join('');
-    }
+    // header, filters, counts: patch in place
+    setHtml($('#al-sum'), pend.length ? `<b>${pend.length}</b> need${pend.length === 1 ? 's' : ''} attention${crit ? ` · <b style="color:#ff8d8d">${crit} critical</b>` : ''}` : 'All clear');
+    $$('#al-view button', root).forEach(b => { b.classList.toggle('on', b.dataset.v === AL.view); $('[data-c]', b).textContent = counts[b.dataset.v]; });
+    const cs = $('#al-cam'); setHtml(cs, `<option value="all">All cameras</option>${camNames.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('')}`); cs.value = AL.cam;
+    $('#al-sev').value = AL.sev;
+    $('#al-ackall').style.display = counts.attention ? '' : 'none';
+    $$('#al-notify button', root).forEach(b => b.classList.toggle('on', b.dataset.n === notifyMode));
+    $$('#al-sound button', root).forEach(b => b.classList.toggle('on', (b.dataset.s === '1') === soundOn));
     const snz = INC.snoozes.filter(s => s.until > Date.now());
-    const notifyOpts = [['quiet', 'Critical only'], ['all', 'Warnings too'], ['off', 'Off']];
-    root.innerHTML = `
-      <div class="al-top"><h1>Alarms</h1><span class="sum">${pend.length ? `<b>${pend.length}</b> need${pend.length === 1 ? 's' : ''} attention${crit ? ` · <b style="color:#ff8d8d">${crit} critical</b>` : ''}` : 'All clear'}</span></div>
-      <div class="al-bar">
-        <div class="segbtn" id="al-view"><button data-v="attention"${AL.view === 'attention' ? ' class="on"' : ''}>Needs attention · ${counts.attention}</button><button data-v="all"${AL.view === 'all' ? ' class="on"' : ''}>All · ${counts.all}</button><button data-v="acked"${AL.view === 'acked' ? ' class="on"' : ''}>Acknowledged · ${counts.acked}</button></div>
-        <select id="al-cam" style="width:auto;min-width:170px;border-radius:99px"><option value="all">All cameras</option>${camNames.map(c => `<option value="${esc(c)}"${c === AL.cam ? ' selected' : ''}>${esc(c)}</option>`).join('')}</select>
-        <select id="al-sev" style="width:auto;min-width:150px;border-radius:99px"><option value="all">Every severity</option><option value="warning"${AL.sev === 'warning' ? ' selected' : ''}>Warning and above</option><option value="critical"${AL.sev === 'critical' ? ' selected' : ''}>Critical only</option></select>
-        <span class="grow"></span>
-        ${counts.attention ? '<button class="btn sm" id="al-ackall">Acknowledge all</button>' : ''}
-      </div>
-      ${snz.length ? `<div class="snoozed">${snz.map(s => { const r = AL.cfgs.find(c => c.o.name === s.cam)?.j.config.alarms.find(a => a.id === s.rule_id); return `<span class="snz"><span><b style="color:var(--text);font-weight:600">${esc(r?.name || s.rule_id)}</b> · ${esc(s.cam)} muted until ${hhmmss(s.until).slice(0, 5)}</span><button class="btn ghost sm" data-unmute="${esc(s.cam)}|${esc(s.rule_id)}">Resume</button></span>`; }).join('')}</div>` : ''}
-      ${body}
-      <div class="inc-group" style="margin-top:34px"><span class="micro">Notifications on this screen</span>
-        <div class="al-bar" style="margin-top:10px"><div class="segbtn" id="al-notify">${notifyOpts.map(([k, l]) => `<button data-n="${k}"${notifyMode === k ? ' class="on"' : ''}>${l}</button>`).join('')}</div>
-        <div class="segbtn" id="al-sound"><button data-s="1"${soundOn ? ' class="on"' : ''}>Sound on</button><button data-s="0"${!soundOn ? ' class="on"' : ''}>Sound off</button></div>
-        <span class="hintline" style="color:var(--faint);font-size:12px">Only brand-new incidents can interrupt you. Repeats join the open incident silently.</span></div></div>
-      <details class="rules"${AL.rulesOpen ? ' open' : ''}><summary><span class="micro">Alarm rules</span></summary>
-        <div class="rulecards">${AL.cfgs.length ? AL.cfgs.map(({ o, j }) => `<div class="rcard"><div class="row"><b>${esc(j.name)}</b><button class="btn ghost sm" data-editcam="${o.id}">Edit rules</button></div><ul>${j.config.alarms.length ? j.config.alarms.map(r => `<li class="${r.enabled ? '' : 'off'}"><span class="sevdot ${r.severity || 'warning'}"></span><b>${esc(r.name)}</b><span>${ruleText(r, j.config)}</span></li>`).join('') : '<li>No rules yet</li>'}</ul></div>`).join('') : '<div class="rcard" style="color:var(--muted)">Add a camera to define alarm rules.</div>'}</div>
-      </details>`;
-    bindAlarms(root);
+    setHtml($('#al-snz'), snz.length ? `<div class="snoozed">${snz.map(s => { const r = AL.cfgs.find(c => c.o.name === s.cam)?.j.config.alarms.find(a => a.id === s.rule_id); return `<span class="snz"><span><b style="color:var(--text);font-weight:600">${esc(r?.name || s.rule_id)}</b> · ${esc(s.cam)} muted until ${hhmmss(s.until).slice(0, 5)}</span><button class="btn ghost sm" data-unmute="${esc(s.cam)}|${esc(s.rule_id)}">Resume</button></span>`; }).join('')}</div>` : '');
+    setHtml($('#al-rules'), AL.cfgs.length ? AL.cfgs.map(({ o, j }) => `<div class="rcard"><div class="row"><b>${esc(j.name)}</b><button class="btn ghost sm" data-editcam="${o.id}">Edit rules</button></div><ul>${j.config.alarms.length ? j.config.alarms.map(r => `<li class="${r.enabled ? '' : 'off'}"><span class="sevdot ${r.severity || 'warning'}"></span><b>${esc(r.name)}</b><span>${ruleText(r, j.config)}</span></li>`).join('') : '<li>No rules yet</li>'}</ul></div>`).join('') : '<div class="rcard" style="color:var(--muted)">Add a camera to define alarm rules.</div>');
+    $('details.rules', root).open = !!AL.rulesOpen;
+
+    // the list: keyed, so a new incident simply appears on top
+    let groups;
+    if (!list.length) {
+      const html = AL.view === 'attention'
+        ? `<div class="allclear" data-id="empty"><b>All clear</b>Nothing needs your attention.${all.length ? ' Handled alarms are under “All”.' : ' Alarms from your rules will show up here, grouped, with a snapshot.'}</div>`
+        : '<div class="allclear" data-id="empty"><b>Nothing here</b>No alarms match these filters.</div>';
+      groups = [{ k: '', items: [{ id: 'empty', html }] }];
+    } else if (AL.view === 'attention') {
+      groups = [{ k: '', items: list.map(i => ({ id: String(i.id), html: incHtml(i) })) }];
+    } else {
+      const m = new Map(); for (const i of list) { const k = i.acked_t ? dayKey(i.last_t) : 'Needs attention'; (m.get(k) || m.set(k, []).get(k)).push(i); }
+      groups = [...m].map(([k, v]) => ({ k, items: v.slice(0, 80).map(i => ({ id: String(i.id), html: incHtml(i) })) }));
+    }
+    const box = $('#al-list'), se = document.scrollingElement, y = se.scrollTop, h0 = se.scrollHeight;
+    const added = syncList(box, groups, AL.primed && box.dataset.v === AL.view + AL.cam + AL.sev);
+    if (INC.loaded) AL.primed = true;
+    box.dataset.v = AL.view + AL.cam + AL.sev;       // switching a filter replaces the list quietly; only live arrivals animate
+    if (added && y > 60) se.scrollTop = y + (se.scrollHeight - h0);   // reading further down? keep your place
   });
 }
 

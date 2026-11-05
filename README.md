@@ -30,14 +30,15 @@ Details and caveats in [docs/RESEARCH.md](docs/RESEARCH.md).
 
 ## What it does
 
-- **Detect, track, count.** YOLO26 (FP16, TensorRT) → ByteTrack → lines that count each object once, per class and direction.
-- **Zones with capacity.** Draw a polygon, say "max 8 vehicles", and watch it fill: live `% consumed` meter, tinted by how full it is.
+- **Detect, track, count.** YOLO26 (FP16, TensorRT) → ByteTrack → lines that count each object once, per class and direction. 15 useful classes: people, cars, trucks, buses, motorcycles, bicycles, trains, boats, dogs, cats, birds, horses, backpacks, handbags, suitcases (pick per camera).
+- **Zones with capacity.** Draw a polygon, say "max 8 objects", and watch it fill: live `% consumed` meter, tinted by how full it is.
 - **Real cameras.** Paste an `rtsp://`, `rtmp://`, HTTP or SRT address, or let Chira scan your network (ONVIF discovery + open RTSP ports) and
   list a camera's streams for you. Dropped streams reconnect by themselves; added cameras come back after a restart.
 - **Alarms that respect your attention.** Per zone or line: *enters*, *leaves*, *stays ≥ N s*, *zone ≥ N % full*, *crosses a line*, by object class.
   Repeats are **grouped into one incident** with a snapshot (the offending object outlined), a count and a duration. Each rule has an importance:
   *info* is only logged, *warning* lights the bell and the camera, only *critical* pops up (and can sound). Acknowledge, or mute a noisy rule for a while;
   it comes back by itself. (Webhooks: not yet.)
+- **Detection settings.** The slider icon in the header: pick the processing resolution (960×544, 1280×736, 1920×1088: raise it when a high-mounted camera makes objects tiny), confidence, overlap merging, GPU batch size and the classes new cameras start with. Every setting has a default and *Reset to defaults*.
 - **Configure in the browser.** Draw lines and polygons on a frozen frame, pick which object classes matter, save: it hot-applies to the
   running camera, no restart.
 - **Analytics.** Traffic flow by class, class mix, zone occupancy over time, dwell-time distribution, KPIs. Events persist across restarts.
@@ -77,6 +78,8 @@ git clone https://github.com/GabrielDornelles/chira && cd chira
 pip install ultralytics onnx
 python research/export_ultra_wrapped.py yolo26m.pt models/yolo26m_544x960.onnx     # or yolo26s.pt for more cameras
 
+# (already exported an older, traffic-only model? research/widen_classes.py in.onnx out.onnx adds the other classes without re-exporting)
+
 # 2. a "camera": any video file. It is streamed in real time, in a loop, like a live source
 mkdir -p videos && cp /path/to/some/traffic_video.mp4 videos/demo.mp4
 
@@ -88,6 +91,20 @@ uv venv .trt-venv && VIRTUAL_ENV=.trt-venv uv pip install tensorrt-cu12-libs==10
 
 The very first start compiles the TensorRT engines (a few minutes per batch size, cached in `trt_cache/`). The UI is available immediately
 and shows the progress. Then click **Add camera**.
+
+### Processing resolution (small objects)
+Detection runs at the resolution the model was exported at. If your camera looks down from a pole or covers a wide yard, people and cars may be only
+a few pixels wide at the default 960×544 and get missed. Open **Detection** (slider icon, top right), choose a larger size and press *Reload engine*:
+the saved cameras come back by themselves. Cost: 1280×736 is about 1.8× the GPU work, 1920×1088 about 4×. The browser view stays 960×540 either way.
+
+Export more sizes yourself (both sides multiples of 32, name the file `<model>_<H>x<W>.onnx` so it is listed):
+
+```bash
+python research/export_ultra_wrapped.py yolo26m.pt models/yolo26m_736x1280.onnx --imgsz 736 1280
+python research/export_ultra_wrapped.py yolo26s.pt models/yolo26s_1088x1920.onnx --imgsz 1088 1920   # S keeps a big size affordable
+```
+
+A new size compiles its TensorRT engines once (a few minutes) and caches them.
 
 ### Your own cameras
 
@@ -107,8 +124,8 @@ LAN, `HOST=0.0.0.0 ./run.sh`, ideally behind a reverse proxy with authentication
 | env var | default | |
 |---|---|---|
 | `EP` | `trt` | `cuda` to skip TensorRT |
-| `MODEL` | `models/yolo26m_544x960.onnx` | any model exported with the script above |
-| `MAX_BATCH` | `4` (trt) / `8` | cameras batched per GPU call (TensorRT builds one engine per size) |
+| `MODEL` | from the app (default `models/yolo26m_544x960.onnx`) | force a model, overriding the *Detection* setting |
+| `MAX_BATCH` | automatic (4 / 3 / 2 for 960 / 1280 / 1920 wide; double on CUDA) | cameras batched per GPU call, overriding the *Detection* setting |
 | `VIDEO` | `videos/demo.mp4` | the simulated camera source |
 | `PORT` | `8787` | |
 | `HOST` | `127.0.0.1` | `0.0.0.0` to listen on the LAN |

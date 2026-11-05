@@ -3,9 +3,11 @@
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const cams = new Map();                       // id -> card state
-// vehicle classes: validated categorical slots (dark mode), same colour everywhere (boxes, chips, charts)
-const COLORS = { car: '#3987e5', truck: '#d95926', bus: '#199e70', motorcycle: '#c98500', bicycle: '#d55181', other: '#cfcfd4' };
-const CLASS_LIST = ['car', 'truck', 'bus', 'motorcycle', 'bicycle'];
+// object classes: person plus the vehicle classes use validated categorical slots; same colour everywhere (boxes, chips, charts)
+const COLORS = {
+  person: '#2cc4d8', car: '#3987e5', truck: '#d95926', bus: '#199e70', motorcycle: '#c98500', bicycle: '#d55181', train: '#8a6fe0', boat: '#5aa5c9',
+  dog: '#c99a5b', cat: '#e59ab8', bird: '#9ccc4a', horse: '#a8774c', backpack: '#8d9ab5', handbag: '#a58fb8', suitcase: '#7f8aa0', other: '#cfcfd4' };
+const CLASS_LIST = ['person', 'car', 'truck', 'bus', 'motorcycle', 'bicycle', 'train', 'boat', 'dog', 'cat', 'bird', 'horse', 'backpack', 'handbag', 'suitcase'];   // same order as src/config.rs
 const ACCENT = '#bda7ff', ACCENT_HI = '#efe9ff';
 const STATUS = { ok: '#d9d5e8', warn: '#fab219', crit: '#d03b3b' };
 const DEFAULTS = { boxes: true, labels: false, trails: true, lines: true, zones: true, hud: true };
@@ -58,6 +60,7 @@ function buildCard(c) {
       <div class="top"><span class="name">${esc(c.name)}</span><span class="live"><i></i><span class="lv">Live</span></span><button class="pip" data-a="pip" data-tip="Open alarms">${I.bell}<span></span></button>
         <div class="tools">${TOOLS.map(([k, n, h]) => `<button data-k="${k}" data-tip="${n} · ${h}">${I[k]}</button>`).join('')}<span class="sep"></span>
           <button data-a="cfg" data-tip="Configure · E">${I.cfg}</button><button data-a="focus" data-tip="Focus · F">${I.focus}</button><button data-a="close" data-tip="Remove camera">${I.close}</button></div></div>
+      <div class="lost"><div><span class="lost-t">Reconnecting to the camera…</span><span class="lost-s">It keeps trying on its own.</span><button class="btn ghost" data-a="remove">Remove camera</button></div></div>
       <div class="hud"><div class="counters"><div class="cl" style="display:flex;gap:34px;flex-wrap:wrap"></div><div class="cz" style="display:flex;gap:0;flex-wrap:wrap"></div></div>
         <div class="rate dev-only"><div><b data-k="fps">–</b><span class="micro">fps</span></div><div><b data-k="lat">–</b><span class="micro">latency</span></div><div><b data-k="drop">–</b><span class="micro">dropped</span></div></div></div>
     </div>`;
@@ -77,6 +80,7 @@ function buildCard(c) {
     else if (b.dataset.a === 'close') removeCam(o.id);
   });
   $('.pip', el).onclick = () => openAlarms(o.name);
+  $('[data-a=remove]', el).onclick = () => removeCam(o.id);
   new ResizeObserver(() => sizeOverlay(o)).observe(o.stage);
   $('#grid').appendChild(el);
 
@@ -155,7 +159,7 @@ function updateZoneMeters(o, zones) {
     const p = z.cap ? z.n / z.cap : 0, sig = `${z.name}|${z.n}|${z.cap}`;
     if (sig !== m.last) {
       m.last = sig; m.name.textContent = z.name; m.v.textContent = Math.round(p * 100);
-      m.bar.style.width = Math.min(100, p * 100) + '%'; m.sub.textContent = `${z.n} of ${z.cap} vehicles`;
+      m.bar.style.width = Math.min(100, p * 100) + '%'; m.sub.textContent = `${z.n} of ${z.cap} objects`;
       m.el.className = 'zmeter' + (p >= .85 ? ' crit' : p >= .6 ? ' warn' : '');
     }
   }
@@ -321,7 +325,7 @@ function renderInbox() {
   box.innerHTML = `<div class="ib-head"><b>Needs attention</b><span class="micro">${pending.length ? INC.list.filter(needsAttention).length + ' open' : ''}</span></div>` +
     (pending.length ? `<div class="ib-list">${pending.map(i => `<div class="ib-row" data-id="${i.id}"><span class="sevdot ${i.severity}"></span><span class="t1">${esc(i.rule)}${i.count > 1 ? ` <span class="cnt">×${i.count}</span>` : ''}</span><button class="btn ghost sm ack" data-ack="${i.id}">Acknowledge</button><span class="t2">${esc(i.cam)} · ${ago(i.last_t)}</span></div>`).join('')}</div>
       <div class="ib-foot"><button class="btn ghost sm" id="ib-all">Acknowledge all</button><button class="btn ghost sm" id="ib-open">Open alarms</button></div>`
-      : `<div class="ib-empty"><svg viewBox="0 0 24 24"><path d="M12 0C13 8 16 11 24 12C16 13 13 16 12 24C11 16 8 13 0 12C8 11 11 8 12 0Z"/></svg><div>All clear</div><div class="micro" style="margin-top:6px">nothing needs your attention</div></div><div class="ib-foot"><span></span><button class="btn ghost sm" id="ib-open">Open alarms</button></div>`);
+      : `<div class="ib-empty"><div>All clear</div><div class="micro" style="margin-top:6px">nothing needs your attention</div></div><div class="ib-foot"><span></span><button class="btn ghost sm" id="ib-open">Open alarms</button></div>`);
   box.onclick = e => {
     e.stopPropagation();
     const a = e.target.closest('[data-ack]'); if (a) return ackIncident(+a.dataset.ack);
@@ -401,7 +405,7 @@ async function poll() {
   let s; try { s = await (await fetch('/api/stats')).json(); } catch { return; }
   const e = s.engine; engineReady = e.ready; if (DEV !== s.dev) { DEV = s.dev; document.body.classList.toggle('dev', DEV); }
   $('#eng').className = 'pill eng ' + (e.error ? 'bad' : e.ready ? 'ok' : 'busy');
-  $('#engtxt').innerHTML = e.error ? 'Engine error' : e.ready ? (DEV ? `<b>${esc(e.model.replace(/_544x960.*/, '').toUpperCase())}</b> · ${e.ep === 'trt' ? 'TensorRT' : 'CUDA'}` : 'Ready') : 'Preparing engine';
+  $('#engtxt').innerHTML = e.error ? 'Engine error' : e.ready ? (DEV ? `<b>${esc(e.model.replace(/_\d+x\d+.*/, '').toUpperCase())}</b> · ${e.ep === 'trt' ? 'TensorRT' : 'CUDA'}` : 'Ready') : 'Preparing engine';
   $('#banner').className = 'banner' + (e.ready ? '' : ' show') + (e.error ? ' err' : '');
   if (!e.ready) { $('#bantitle').textContent = e.error ? 'The engine failed to start' : e.message || 'Starting'; $('#bantext').textContent = e.error || 'The first start compiles an optimised GPU engine for your card. This happens once; later starts take seconds.'; }
   $('#addbtn').disabled = !e.ready;
@@ -415,7 +419,9 @@ async function poll() {
     const o = cams.get(c.id), q = k => $(`[data-k="${k}"]`, o.el);
     o.src = c.src_fps;
     $('.live', o.el).classList.toggle('off', c.status !== 'running');
-    o.el.classList.toggle('reconnecting', c.status === 'reconnecting');
+    const lost = c.status === 'reconnecting' || c.status.startsWith('error');
+    o.el.classList.toggle('reconnecting', lost);
+    $('.lost-t', o.el).textContent = lost && c.status.startsWith('error') ? 'This camera is not responding' : 'Reconnecting to the camera…';
     $('.lv', o.el).textContent = c.status === 'running' ? (DEV ? `Live · ${c.src_fps} fps` : 'Live') : c.status.startsWith('error') ? 'Offline' : cap(c.status.split(' ')[0]);
     q('fps').textContent = fmt(c.fps, 1); q('lat').innerHTML = fmt(c.lat_ms) + '<small>ms</small>';
     const t = c.processed + c.dropped, dp = t ? 100 * c.dropped / t : 0, dd = q('drop');

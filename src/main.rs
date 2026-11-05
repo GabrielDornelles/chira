@@ -6,6 +6,7 @@ mod counter;
 mod detector;
 mod discover;
 mod pipeline;
+mod settings;
 mod tracker;
 mod zones;
 
@@ -80,7 +81,8 @@ async fn index() -> impl IntoResponse {
     ([("content-type", "text/html; charset=utf-8"), ("cache-control", "no-store")], body)
 }
 
-const ASSETS: [(&str, &str); 6] = [
+const ASSETS: [(&str, &str); 7] = [
+    ("model.js", include_str!("../static/model.js")),
     ("alarms.js", include_str!("../static/alarms.js")),
     ("addcam.js", include_str!("../static/addcam.js")),
     ("app.js", include_str!("../static/app.js")),
@@ -218,6 +220,98 @@ async fn remove_camera(State(app): State<Shared>, Path(id): Path<u32>) -> Status
     }
 }
 
+// ---------------------------------------------------------------- detection settings
+/// Models in ./models that follow the `<name>_<H>x<W>.onnx` convention. The resolution is a property of the file.
+fn list_models() -> Vec<serde_json::Value> {
+    let mut v: Vec<(String, usize, usize, u64)> = std::fs::read_dir("models")
+        .map(|d| d.flatten().filter_map(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            if !name.ends_with(".onnx") || name.contains("traffic-only") {
+                return None;
+            }
+            let (h, w) = settings::parse_res(&name)?;
+            Some((name, h, w, e.metadata().map(|m| m.len()).unwrap_or(0)))
+        }).collect())
+        .unwrap_or_default();
+    v.sort_by(|a, b| (a.0.split('_').next(), a.1 * a.2).cmp(&(b.0.split('_').next(), b.1 * b.2)));
+    v.into_iter().map(|(name, h, w, size)| {
+        let family = name.trim_end_matches(".onnx").split('_').next().unwrap_or("").to_string();
+        json!({"file": format!("models/{name}"), "family": family, "w": w, "h": h, "mb": (size as f64 / 1e6).round(),
+               "cost": ((w * h) as f64 / (960.0 * 544.0) * 10.0).round() / 10.0, "all_classes": family.starts_with("yolo26")})
+    }).collect()
+}
+
+fn model_state(app: &App) -> serde_json::Value {
+    let st = settings::current();
+    let from_env = settings::model_from_env();
+    let active = settings::loaded_model();
+    let trt = std::env::var("EP").as_deref() == Ok("trt");
+    let wanted = settings::effective_batch(&settings::active_model(), trt);
+    let d = detector::dims();
+    json!({
+        "settings": st, "defaults": settings::Settings::default(),
+        "models": list_models(),
+        "classes": config::CLASSES.iter().map(|c| c.0).collect::<Vec<_>>(),
+        "active": {"model": active, "w": d.w, "h": d.h, "max_batch": app.max_batch, "ep": std::env::var("EP").unwrap_or_else(|_| "cuda".into()), "from_env": from_env.is_some(),
+                   "auto_batch": settings::auto_batch(settings::parse_res(&st.model).map_or(960, |r| r.1), trt)},
+        "restart_needed": wanted != app.max_batch || (from_env.is_none() && st.model != active),
+    })
+}
+
+async fn model_get(State(app): State<Shared>) -> Json<serde_json::Value> {
+    Json(model_state(&app))
+}
+
+/// Partial update: only the fields that are sent change. Confidence and overlap apply immediately.
+async fn model_put(State(app): State<Shared>, Json(patch): Json<serde_json::Value>) -> impl IntoResponse {
+    let mut cur = serde_json::to_value(settings::current()).unwrap_or_default();
+    if let (Some(c), Some(p)) = (cur.as_object_mut(), patch.as_object()) {
+        for (k, v) in p {
+            c.insert(k.clone(), v.clone());
+        }
+    }
+    let Ok(next) = serde_json::from_value::<settings::Settings>(cur) else {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": "invalid settings"})));
+    };
+    if !list_models().iter().any(|m| m["file"] == next.model.as_str()) && next.model != settings::current().model {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": "unknown model"})));
+    }
+    settings::save(next);
+    (StatusCode::OK, Json(model_state(&app)))
+}
+
+async fn model_reset(State(app): State<Shared>) -> Json<serde_json::Value> {
+    settings::save(settings::Settings::default());
+    Json(model_state(&app))
+}
+
+/// Reload the engine with the saved model / batch size: stop the cameras, let the database flush, re-exec this binary.
+/// The saved cameras come back by themselves once the new engine is ready.
+async fn restart_api(State(app): State<Shared>) -> (StatusCode, Json<serde_json::Value>) {
+    // find the program to relaunch BEFORE stopping anything. After a rebuild Linux reports the running file as "... (deleted)":
+    // the new build lives at the same path.
+    let exe = std::env::current_exe().ok().map(|p| {
+        let t = p.to_string_lossy().to_string();
+        std::path::PathBuf::from(t.strip_suffix(" (deleted)").unwrap_or(&t))
+    });
+    let Some(exe) = exe.filter(|p| p.exists()) else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "cannot find the program to relaunch; restart Chira by hand"})));
+    };
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let cams: Vec<Arc<Camera>> = app.cams.lock().values().cloned().collect();
+        for c in &cams {
+            c.stop();
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1000));
+        use std::os::unix::process::CommandExt;
+        let err = Command::new(&exe).args(std::env::args().skip(1)).exec();
+        eprintln!("restart failed: {err}");
+        std::process::exit(1);
+    });
+    (StatusCode::ACCEPTED, Json(json!({"ok": true})))
+}
+
 // ---------------------------------------------------------------- discovery
 async fn discover_api(State(_): State<Shared>) -> Json<serde_json::Value> {
     let found = tokio::task::spawn_blocking(discover::discover).await.unwrap_or_default();
@@ -328,6 +422,7 @@ async fn stats(State(app): State<Shared>) -> Json<serde_json::Value> {
             "ready": b.is_some(), "error": *app.error.lock(), "message": detector::STATUS.lock().clone(),
             "ep": std::env::var("EP").unwrap_or_else(|_| "cuda".into()),
             "model": pipeline::model_path().rsplit('/').next().unwrap_or("").trim_end_matches(".onnx").to_string(),
+            "w": detector::dims().w, "h": detector::dims().h,
         },
         "gpu": {"util": g.util, "mem_used": g.mem_used, "mem_total": g.mem_total, "power": g.power},
         "cpu_cores": *app.cpu_cores.lock(),
@@ -429,7 +524,7 @@ async fn main() {
     if std::env::args().any(|a| a == "--bench-model") {
         let mut d = detector::Detector::new(&pipeline::model_path(), std::env::var("MAX_BATCH").ok().and_then(|v| v.parse().ok()).unwrap_or(8)).unwrap();
         for b in 1..=8usize {
-            let x = vec![114u8; detector::FRAME_BYTES * b];
+            let x = vec![114u8; detector::dims().frame_bytes() * b];
             for _ in 0..3 {
                 d.detect(&x, b).unwrap();
             }
@@ -445,14 +540,15 @@ async fn main() {
         for _ in 0..2 {
             let t = std::time::Instant::now();
             for &b in pat.iter().cycle().take(40) {
-                d.detect(&vec![114u8; detector::FRAME_BYTES * b], b).unwrap();
+                d.detect(&vec![114u8; detector::dims().frame_bytes() * b], b).unwrap();
             }
             println!("mixed shapes: {:.1} ms/call", t.elapsed().as_secs_f64() * 1000.0 / 40.0);
         }
         return;
     }
     let trt = std::env::var("EP").as_deref() == Ok("trt");
-    let max_batch: usize = std::env::var("MAX_BATCH").ok().and_then(|v| v.parse().ok()).unwrap_or(if trt { 4 } else { 8 });
+    settings::loaded_model();   // remember what this process loads
+    let max_batch: usize = settings::effective_batch(&pipeline::model_path(), trt);
     let wait_ms: f64 = std::env::var("BATCH_WAIT_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(40.0);
     let app: Shared = Arc::new(App {
         batcher: RwLock::new(None),
@@ -494,6 +590,9 @@ async fn main() {
         .route("/api/cameras", post(add_camera))
         .route("/api/cameras/:id", delete(remove_camera))
         .route("/api/stats", get(stats))
+        .route("/api/model", get(model_get).put(model_put))
+        .route("/api/model/reset", post(model_reset))
+        .route("/api/restart", post(restart_api))
         .route("/api/config/:id", get(get_config).put(put_config))
         .route("/api/events", get(events))
         .route("/api/discover", post(discover_api))
